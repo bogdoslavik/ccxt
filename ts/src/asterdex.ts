@@ -1,10 +1,11 @@
 //  ---------------------------------------------------------------------------
 
 import Exchange from './abstract/asterdex.js';
-import { ExchangeError, AuthenticationError, BadSymbol, InvalidOrder, InsufficientFunds, OrderNotFound, RateLimitExceeded, DDoSProtection, BadRequest } from './base/errors.js';
+import { ExchangeError, AuthenticationError, BadSymbol, InvalidOrder, InsufficientFunds, OrderNotFound, RateLimitExceeded, DDoSProtection, BadRequest, ArgumentsRequired } from './base/errors.js';
 import { sha256 } from './static_dependencies/noble-hashes/sha256.js';
+import { Precise } from './base/Precise.js';
 import { TICK_SIZE } from './base/functions/number.js';
-import type { Market, Dict, Ticker, Tickers, OrderBook, Trade, OHLCV, FundingRate, FundingRates, FundingRateHistory, Str, Strings, OpenInterest, int } from './base/types.js';
+import type { Market, Dict, Ticker, Tickers, OrderBook, Trade, OHLCV, FundingRate, FundingRates, FundingRateHistory, Str, Strings, OpenInterest, int, Balances, Position, Order } from './base/types.js';
 
 //  ---------------------------------------------------------------------------
 
@@ -454,6 +455,35 @@ export default class asterdex extends Exchange {
         return this.safeInteger (response, 'serverTime');
     }
 
+    async fetchBalance (params = {}): Promise<Balances> {
+        await this.loadMarkets ();
+        this.checkRequiredCredentials (true);
+        const response = await this.privateGetAccount (params);
+        this.logResponse ('fetchBalance', response);
+        return this.parseBalance (response);
+    }
+
+    parseBalance (response) {
+        const timestamp = this.safeInteger (response, 'updateTime');
+        const result = {
+            'info': response,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+        };
+        const assets = this.safeList (response, 'assets', []);
+        for (let i = 0; i < assets.length; i++) {
+            const entry = assets[i];
+            const currencyId = this.safeString (entry, 'asset');
+            const code = this.safeCurrencyCode (currencyId);
+            const account = this.account ();
+            account['total'] = this.safeString (entry, 'walletBalance');
+            account['free'] = this.safeString (entry, 'availableBalance');
+            account['used'] = this.safeString (entry, 'crossWalletBalance');
+            result[code] = account;
+        }
+        return this.safeBalance (result);
+    }
+
     parseTicker (ticker: Dict, market: Market = undefined): Ticker {
         const symbol = this.safeSymbol (this.safeString (ticker, 'symbol'), market);
         const timestamp = this.safeInteger2 (ticker, 'closeTime', 'time');
@@ -749,6 +779,229 @@ export default class asterdex extends Exchange {
         const response = await this.publicGetOpenInterest (this.extend (request, params));
         this.logResponse ('fetchOpenInterest', response);
         return this.parseOpenInterest (response, market);
+    }
+
+    parseOrderStatus (status: Str) {
+        const statuses = {
+            'NEW': 'open',
+            'PARTIALLY_FILLED': 'open',
+            'FILLED': 'closed',
+            'CANCELED': 'canceled',
+            'REJECTED': 'rejected',
+            'EXPIRED': 'expired',
+        };
+        return this.safeString (statuses, status, status);
+    }
+
+    parseOrder (order, market: Market = undefined): Order {
+        const marketId = this.safeString (order, 'symbol');
+        const symbol = this.safeSymbol (marketId, market);
+        const timestamp = this.safeInteger2 (order, 'time', 'updateTime');
+        const lastTradeTimestamp = this.safeInteger (order, 'updateTime');
+        const status = this.parseOrderStatus (this.safeString (order, 'status'));
+        const type = this.safeStringLower (order, 'type');
+        const side = this.safeStringLower (order, 'side');
+        const fee = {
+            'cost': this.safeNumber (order, 'commission'),
+            'currency': this.safeCurrencyCode (this.safeString (order, 'commissionAsset')),
+        };
+        const timeInForce = this.safeString (order, 'timeInForce');
+        const amount = this.safeString (order, 'origQty');
+        const filled = this.safeString (order, 'executedQty');
+        let remaining = undefined;
+        if (amount !== undefined && filled !== undefined) {
+            remaining = Precise.stringSub (amount, filled);
+        }
+        return this.safeOrder ({
+            'info': order,
+            'id': this.safeString (order, 'orderId'),
+            'clientOrderId': this.safeString (order, 'clientOrderId'),
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'lastTradeTimestamp': lastTradeTimestamp,
+            'symbol': symbol,
+            'type': type,
+            'timeInForce': timeInForce,
+            'postOnly': (timeInForce === 'GTX') ? true : undefined,
+            'side': side,
+            'price': this.safeString (order, 'price'),
+            'amount': amount,
+            'cost': this.safeString (order, 'cumQuote'),
+            'average': this.safeString (order, 'avgPrice'),
+            'filled': filled,
+            'remaining': remaining,
+            'status': status,
+            'fee': fee,
+            'stopPrice': this.safeString (order, 'stopPrice'),
+            'reduceOnly': this.safeBool (order, 'reduceOnly'),
+        });
+    }
+
+    normalizeClientId (params) {
+        const clientOrderId = this.safeString2 (params, 'clientOrderId', 'newClientOrderId');
+        if (clientOrderId !== undefined && clientOrderId !== '') {
+            return clientOrderId;
+        }
+        return this.safeString (params, 'clientOrderId');
+    }
+
+    async createOrder (symbol: Str, type: Str, side: Str, amount, price = undefined, params = {}) {
+        await this.loadMarkets ();
+        this.checkRequiredCredentials (true);
+        const market = this.market (symbol);
+        const upperType = type.toUpperCase ();
+        const request = {
+            'symbol': market['id'],
+            'side': side.toUpperCase (),
+            'type': upperType,
+        };
+        const clientOrderId = this.normalizeClientId (params);
+        if (clientOrderId !== undefined) {
+            request['newClientOrderId'] = clientOrderId;
+        }
+        const reduceOnly = this.safeBool (params, 'reduceOnly');
+        if (reduceOnly !== undefined) {
+            request['reduceOnly'] = reduceOnly;
+            params = this.omit (params, 'reduceOnly');
+        }
+        if (upperType === 'MARKET') {
+            const quoteOrderQty = this.safeNumber2 (params, 'quoteOrderQty', 'cost');
+            if (quoteOrderQty !== undefined) {
+                request['quoteOrderQty'] = this.costToPrecision (symbol, quoteOrderQty);
+                params = this.omit (params, [ 'quoteOrderQty', 'cost' ]);
+            } else {
+                request['quantity'] = this.amountToPrecision (symbol, amount);
+            }
+        } else {
+            request['quantity'] = this.amountToPrecision (symbol, amount);
+            request['price'] = this.priceToPrecision (symbol, price);
+            const timeInForce = this.safeStringUpper (params, 'timeInForce');
+            if (timeInForce !== undefined) {
+                request['timeInForce'] = timeInForce;
+                params = this.omit (params, 'timeInForce');
+            }
+        }
+        const response = await this.privatePostOrder (this.extend (request, params));
+        this.logResponse ('createOrder', response);
+        return this.parseOrder (response, market);
+    }
+
+    async cancelOrder (id: Str, symbol: Str = undefined, params = {}) {
+        await this.loadMarkets ();
+        this.checkRequiredCredentials (true);
+        if (symbol === undefined) {
+            throw new ArgumentsRequired (this.id + ' cancelOrder() requires a symbol argument');
+        }
+        const market = this.market (symbol);
+        const request = {
+            'symbol': market['id'],
+            'orderId': id,
+        };
+        const response = await this.privateDeleteOrder (this.extend (request, params));
+        this.logResponse ('cancelOrder', response);
+        return this.parseOrder (response, market);
+    }
+
+    async fetchOpenOrders (symbol: Str = undefined, since: int = undefined, limit: int = undefined, params = {}) {
+        await this.loadMarkets ();
+        this.checkRequiredCredentials (true);
+        const request = {};
+        let market = undefined;
+        if (symbol !== undefined) {
+            market = this.market (symbol);
+            request['symbol'] = market['id'];
+        }
+        const response = await this.privateGetOpenOrders (this.extend (request, params));
+        this.logResponse ('fetchOpenOrders', response);
+        return this.parseOrders (response, market, since, limit);
+    }
+
+    async fetchOrders (symbol: Str = undefined, since: int = undefined, limit: int = undefined, params = {}) {
+        await this.loadMarkets ();
+        this.checkRequiredCredentials (true);
+        if (symbol === undefined) {
+            throw new ArgumentsRequired (this.id + ' fetchOrders() requires a symbol argument');
+        }
+        const market = this.market (symbol);
+        const request = {
+            'symbol': market['id'],
+        };
+        if (since !== undefined) {
+            request['startTime'] = since;
+        }
+        if (limit !== undefined) {
+            request['limit'] = limit;
+        }
+        const response = await this.privateGetAllOrders (this.extend (request, params));
+        this.logResponse ('fetchOrders', response);
+        return this.parseOrders (response, market, since, limit);
+    }
+
+    async fetchMyTrades (symbol: Str = undefined, since: int = undefined, limit: int = undefined, params = {}) {
+        await this.loadMarkets ();
+        this.checkRequiredCredentials (true);
+        if (symbol === undefined) {
+            throw new ArgumentsRequired (this.id + ' fetchMyTrades() requires a symbol argument');
+        }
+        const market = this.market (symbol);
+        const request = {
+            'symbol': market['id'],
+        };
+        if (since !== undefined) {
+            request['startTime'] = since;
+        }
+        if (limit !== undefined) {
+            request['limit'] = limit;
+        }
+        const response = await this.privateGetUserTrades (this.extend (request, params));
+        this.logResponse ('fetchMyTrades', response);
+        return this.parseTrades (response, market, since, limit);
+    }
+
+    async fetchPositions (symbols: Strings = undefined, params = {}) {
+        await this.loadMarkets ();
+        this.checkRequiredCredentials (true);
+        const response = await this.privateGetPositionRisk (params);
+        this.logResponse ('fetchPositions', response);
+        return this.parsePositions (response, symbols);
+    }
+
+    parsePosition (position, market: Market = undefined): Position {
+        const marketId = this.safeString (position, 'symbol');
+        const symbol = this.safeSymbol (marketId, market);
+        const timestamp = this.safeInteger (position, 'updateTime');
+        const isolated = this.safeString (position, 'marginType') === 'isolated';
+        const entryPrice = this.safeNumber (position, 'entryPrice');
+        const size = this.safeNumber (position, 'positionAmt');
+        let side = undefined;
+        if (size !== undefined) {
+            if (size > 0) {
+                side = 'long';
+            } else if (size < 0) {
+                side = 'short';
+            }
+        }
+        const leverage = this.safeNumber (position, 'leverage');
+        const notional = this.safeNumber (position, 'notional');
+        const unrealizedPnl = this.safeNumber (position, 'unRealizedProfit');
+        const contracts = (size !== undefined) ? Math.abs (size) : undefined;
+        return this.safePosition ({
+            'info': position,
+            'symbol': symbol,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'isolated': isolated,
+            'marginMode': isolated ? 'isolated' : 'cross',
+            'entryPrice': entryPrice,
+            'notional': notional,
+            'leverage': leverage,
+            'collateral': this.safeNumber (position, 'isolatedMargin'),
+            'side': side,
+            'contracts': contracts,
+            'contractSize': this.safeNumber (position, 'contractSize'),
+            'unrealizedPnl': unrealizedPnl,
+            'liquidationPrice': this.safeNumber (position, 'liquidationPrice'),
+        });
     }
 
     sign (path: string, api: string = 'public', method: string = 'GET', params = {}, headers = undefined, body = undefined) {
