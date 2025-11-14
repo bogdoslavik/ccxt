@@ -68,6 +68,7 @@ from ccxt.async_support.alpaca import alpaca                                    
 from ccxt.async_support.apex import apex                                        # noqa: F401
 from ccxt.async_support.arkham import arkham                                    # noqa: F401
 from ccxt.async_support.ascendex import ascendex                                # noqa: F401
+from ccxt.async_support.asterdex import asterdex                                # noqa: F401
 from ccxt.async_support.backpack import backpack                                # noqa: F401
 from ccxt.async_support.bequant import bequant                                  # noqa: F401
 from ccxt.async_support.bigone import bigone                                    # noqa: F401
@@ -177,6 +178,7 @@ exchanges = [
     'apex',
     'arkham',
     'ascendex',
+    'asterdex',
     'backpack',
     'bequant',
     'bigone',

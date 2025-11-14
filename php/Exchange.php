@@ -342,6 +342,7 @@ class Exchange {
         'apex',
         'arkham',
         'ascendex',
+        'asterdex',
         'backpack',
         'bequant',
         'bigone',
