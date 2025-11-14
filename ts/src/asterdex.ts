@@ -958,6 +958,69 @@ export default class asterdex extends Exchange {
         return this.parseTrades (response, market, since, limit);
     }
 
+    async fetchLeverage (symbol: Str = undefined, params = {}) {
+        await this.loadMarkets ();
+        this.checkRequiredCredentials (true);
+        const request = {};
+        const response = await this.privateGetLeverageBracket (this.extend (request, params));
+        this.logResponse ('fetchLeverage', response);
+        if (symbol === undefined) {
+            return response;
+        }
+        const market = this.market (symbol);
+        for (let i = 0; i < response.length; i++) {
+            const entry = response[i];
+            if (this.safeString (entry, 'symbol') === market['id']) {
+                return entry;
+            }
+        }
+        return undefined;
+    }
+
+    async setLeverage (leverage, symbol: Str = undefined, params = {}) {
+        await this.loadMarkets ();
+        this.checkRequiredCredentials (true);
+        if (symbol === undefined) {
+            throw new ArgumentsRequired (this.id + ' setLeverage() requires a symbol argument');
+        }
+        const market = this.market (symbol);
+        const request = {
+            'symbol': market['id'],
+            'leverage': leverage,
+        };
+        const response = await this.privatePostLeverage (this.extend (request, params));
+        this.logResponse ('setLeverage', response);
+        return response;
+    }
+
+    async setMarginMode (marginMode: Str, symbol: Str = undefined, params = {}) {
+        await this.loadMarkets ();
+        this.checkRequiredCredentials (true);
+        if (symbol === undefined) {
+            throw new ArgumentsRequired (this.id + ' setMarginMode() requires a symbol argument');
+        }
+        const market = this.market (symbol);
+        const marginModeUpper = marginMode.toUpperCase ();
+        const request = {
+            'symbol': market['id'],
+            'marginType': marginModeUpper,
+        };
+        const response = await this.privatePostMarginType (this.extend (request, params));
+        this.logResponse ('setMarginMode', response);
+        return response;
+    }
+
+    async setPositionMode (hedged: boolean, params = {}) {
+        await this.loadMarkets ();
+        this.checkRequiredCredentials (true);
+        const request = {
+            'dualSidePosition': hedged ? 'true' : 'false',
+        };
+        const response = await this.privatePostPositionSideDual (this.extend (request, params));
+        this.logResponse ('setPositionMode', response);
+        return response;
+    }
+
     async fetchPositions (symbols: Strings = undefined, params = {}) {
         await this.loadMarkets ();
         this.checkRequiredCredentials (true);
