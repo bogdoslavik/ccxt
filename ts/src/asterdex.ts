@@ -958,6 +958,37 @@ export default class asterdex extends Exchange {
         return this.parseTrades (response, market, since, limit);
     }
 
+    async fetchListenKey (params = {}) {
+        this.checkRequiredCredentials (true);
+        const response = await this.privatePostListenKey (params);
+        this.logResponse ('fetchListenKey', response);
+        this.options['listenKey'] = this.safeString (response, 'listenKey');
+        return this.options['listenKey'];
+    }
+
+    async keepAliveListenKey (params = {}) {
+        this.checkRequiredCredentials (true);
+        const listenKey = this.safeString (this.options, 'listenKey');
+        if (listenKey === undefined) {
+            throw new ArgumentsRequired (this.id + ' keepAliveListenKey() requires fetchListenKey() to be called first');
+        }
+        const response = await this.privatePutListenKey (this.extend ({ 'listenKey': listenKey }, params));
+        this.logResponse ('keepAliveListenKey', response);
+        return response;
+    }
+
+    async closeListenKey (params = {}) {
+        this.checkRequiredCredentials (true);
+        const listenKey = this.safeString (this.options, 'listenKey');
+        if (listenKey === undefined) {
+            throw new ArgumentsRequired (this.id + ' closeListenKey() requires fetchListenKey() to be called first');
+        }
+        const response = await this.privateDeleteListenKey (this.extend ({ 'listenKey': listenKey }, params));
+        this.logResponse ('closeListenKey', response);
+        this.options['listenKey'] = undefined;
+        return response;
+    }
+
     async fetchLeverage (symbol: Str = undefined, params = {}) {
         await this.loadMarkets ();
         this.checkRequiredCredentials (true);
