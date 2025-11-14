@@ -604,6 +604,42 @@ export default class asterdex extends Exchange {
         return this.parseOHLCVs (response, market, timeframe, since, limit);
     }
 
+    async fetchMarkOHLCV (symbol: Str, timeframe = '1m', since: int = undefined, limit: int = 500, params = {}): Promise<OHLCV[]> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const request = {
+            'symbol': market['id'],
+            'interval': timeframe,
+        };
+        if (since !== undefined) {
+            request['startTime'] = since;
+        }
+        if (limit !== undefined) {
+            request['limit'] = limit;
+        }
+        const response = await this.publicGetMarkPriceKlines (this.extend (request, params));
+        this.logResponse ('fetchMarkOHLCV', response);
+        return this.parseOHLCVs (response, market, timeframe, since, limit);
+    }
+
+    async fetchIndexOHLCV (symbol: Str, timeframe = '1m', since: int = undefined, limit: int = 500, params = {}): Promise<OHLCV[]> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const request = {
+            'pair': market['id'],
+            'interval': timeframe,
+        };
+        if (since !== undefined) {
+            request['startTime'] = since;
+        }
+        if (limit !== undefined) {
+            request['limit'] = limit;
+        }
+        const response = await this.publicGetIndexPriceKlines (this.extend (request, params));
+        this.logResponse ('fetchIndexOHLCV', response);
+        return this.parseOHLCVs (response, market, timeframe, since, limit);
+    }
+
     parseFundingRate (contract, market: Market = undefined): FundingRate {
         const marketId = this.safeString (contract, 'symbol');
         const symbol = this.safeSymbol (marketId, market);
