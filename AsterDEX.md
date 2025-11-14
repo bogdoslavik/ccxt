@@ -25,6 +25,12 @@
 - Added a regression guard in `ts/src/test/tests.ts` (`testAsterdex`) that instantiates the offline exchange and asserts the `fapiPublic` URL contains `asterdex.com`, so regressions won’t silently point back to Binance.
 - Next up: implement market loaders (Step 3) so we can call the real `/fapi/v1/exchangeInfo` and normalize symbols, then proceed to balance/trade endpoints once host plumbing is verified.
 
+## Step 3 – Market Data Work Items (in progress)
+- **`fetchMarkets` parity check**: run the inherited `binanceusdm` implementation against `https://fapi.asterdex.com/fapi/v1/exchangeInfo`, confirm fields like `contractType`, filters, and precision map correctly. Add any overrides if `exchangeInfo` omits assets or uses custom quotes.  
+- **Ticker/book/trade passthrough**: sanity-test `fetchTicker`, `fetchTickers`, `fetchOrderBook`, `fetchTrades`, `fetchOHLCV`, `fetchFundingRate(s)` to ensure host rewrites handle public REST. Document quirks (e.g., unsupported symbols) here if adjustments are needed.  
+- **Mark/index streams**: verify `/premiumIndex`, `/indexPriceKlines`, `/markPriceKlines`, `/aggTrades` weight behavior; extend `describe.features` if Aster-specific gaps exist.  
+- **Validation**: once the above routes respond, capture command log plus sample response in staged notes, then run `npm run test:asterdex` (TS-only) to keep regression coverage focused without touching other languages.
+
 ## Open Questions / Next Steps
 - Confirm whether Aster exposes spot markets or only USDⓈ-M perpetuals; docs imply futures-only, but double-check for any `/dapi` or spot endpoints before coding `has` flags.
 - Identify sandbox vs. mainnet host overrides (docs reference only `fapi.asterdex.com`; verify if there’s testnet base like `https://testnet.fapi.asterdex.com` or HyperETH proxy).
