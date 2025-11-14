@@ -6,6 +6,7 @@ import type { OrderBook, Trade, Ticker, Tickers, OHLCV, Int, Str, Strings } from
 //  ---------------------------------------------------------------------------
 
 export default class asterdex extends asterdexRest {
+    listenKeyRefreshTimer: any = undefined;
     describe (): any {
         const parent = super.describe ();
         return this.deepExtend (parent, {
@@ -93,5 +94,30 @@ export default class asterdex extends asterdexRest {
         const url = this.urls['api']['ws']['future'] + '/' + stream;
         const data = await this.watch (url, stream, undefined, params);
         return this.parseTicker (data, market);
+    }
+
+    async getPrivateListenKey () {
+        let listenKey = this.safeString (this.options, 'listenKey');
+        if (listenKey === undefined) {
+            listenKey = await this.fetchListenKey ();
+            this.options['listenKey'] = listenKey;
+            this.schedulePrivateListenKeyKeepAlive ();
+        }
+        return listenKey;
+    }
+
+    schedulePrivateListenKeyKeepAlive () {
+        const delay = this.safeInteger (this.options, 'listenKeyRefreshRate', 1200000);
+        if (this.listenKeyRefreshTimer !== undefined) {
+            clearTimeout (this.listenKeyRefreshTimer);
+        }
+        this.listenKeyRefreshTimer = setTimeout (() => {
+            this.keepAliveListenKey ().then (() => {
+                this.schedulePrivateListenKeyKeepAlive ();
+            }).catch (() => {
+                this.listenKeyRefreshTimer = undefined;
+                this.options['listenKey'] = undefined;
+            });
+        }, delay);
     }
 }
