@@ -362,7 +362,6 @@ export default class asterdex extends Exchange {
         const base = this.safeCurrencyCode (baseId);
         const quote = this.safeCurrencyCode (quoteId);
         const settle = this.safeCurrencyCode (settleId);
-        const contractType = this.safeStringLower (market, 'contractType');
         const status = this.safeString (market, 'status');
         const active = (status === 'TRADING');
         const contractSize = this.safeNumber (market, 'contractSize', 1);
@@ -397,10 +396,8 @@ export default class asterdex extends Exchange {
             'amount': stepSize,
             'price': tickSize,
         };
-        const type = this.safeStringLower (market, 'contractType');
         const linear = true;
         const inverse = false;
-        const settleType = this.safeStringLower (market, 'marginAsset', 'usdt');
         const symbol = base + '/' + quote + ':' + settle;
         return {
             'id': id,
@@ -544,6 +541,10 @@ export default class asterdex extends Exchange {
         const symbol = this.safeSymbol (marketId, market);
         const buyerMaker = this.safeBool2 (trade, 'm', 'isBuyerMaker');
         const takerOrMaker = (buyerMaker === undefined) ? undefined : 'taker';
+        let side = undefined;
+        if (buyerMaker !== undefined) {
+            side = buyerMaker ? 'sell' : 'buy';
+        }
         return this.safeTrade ({
             'info': trade,
             'id': id,
@@ -552,7 +553,7 @@ export default class asterdex extends Exchange {
             'symbol': symbol,
             'order': orderId,
             'type': undefined,
-            'side': (buyerMaker !== undefined) ? (buyerMaker ? 'sell' : 'buy') : undefined,
+            'side': side,
             'takerOrMaker': takerOrMaker,
             'price': price,
             'amount': amount,
@@ -795,7 +796,7 @@ export default class asterdex extends Exchange {
 
     logResponse (label: string, payload) {
         if (this.safeBool (this.options, 'log', false)) {
-            console.log (this.id + ' ' + label + ': ' + this.json (payload));
+            this.log (this.id + ' ' + label + ': ' + this.json (payload));
         }
     }
 }
