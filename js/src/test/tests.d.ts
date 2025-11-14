@@ -85,6 +85,7 @@ declare class testMainClass {
     testBingx(): Promise<boolean>;
     testPhemex(): Promise<boolean>;
     testBlofin(): Promise<boolean>;
+    testAsterdex(): Promise<boolean>;
     testCoinbaseinternational(): Promise<boolean>;
     testCoinbaseAdvanced(): Promise<boolean>;
     testWoofiPro(): Promise<boolean>;

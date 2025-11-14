@@ -1928,6 +1928,15 @@ class testMainClass {
         }
         return true;
     }
+    async testAsterdex() {
+        const exchange = this.initOfflineExchange('asterdex');
+        const host = exchange.safeString(exchange.urls['api'], 'fapiPublic');
+        assert(host && (host.indexOf('asterdex.com') > -1), 'asterdex - unexpected fapiPublic host: ' + host);
+        if (!isSync()) {
+            await close(exchange);
+        }
+        return true;
+    }
     // async testHyperliquid () {
     //     const exchange = this.initOfflineExchange ('hyperliquid');
     //     const id = '1';

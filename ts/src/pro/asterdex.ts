@@ -6,11 +6,12 @@ import binanceusdm from './binanceusdm.js';
 
 export default class asterdex extends binanceusdm {
     describe (): any {
-        return this.deepExtend (super.describe (), {
+        const parent = super.describe ();
+        return this.deepExtend (parent, {
             'id': 'asterdex',
             'name': 'AsterDEX',
             'dex': true,
-            'urls': {
+            'urls': this.deepExtend (parent['urls'], {
                 'logo': 'https://www.asterdex.com/images/logo.svg',
                 'www': 'https://www.asterdex.com',
                 'doc': [
@@ -18,7 +19,7 @@ export default class asterdex extends binanceusdm {
                     'https://github.com/asterdex/api-docs',
                 ],
                 'api_management': 'https://www.asterdex.com/en/api-management',
-                'api': {
+                'api': this.deepExtend (parent['urls']['api'], {
                     'public': 'https://fapi.asterdex.com/fapi/v3',
                     'private': 'https://fapi.asterdex.com/fapi/v3',
                     'fapiPublic': 'https://fapi.asterdex.com/fapi/v1',
@@ -28,8 +29,8 @@ export default class asterdex extends binanceusdm {
                     'fapiPrivateV2': 'https://fapi.asterdex.com/fapi/v2',
                     'fapiPrivateV3': 'https://fapi.asterdex.com/fapi/v3',
                     'fapiData': 'https://fapi.asterdex.com/futures/data',
-                },
-                'test': {
+                }),
+                'test': this.deepExtend (parent['urls']['test'], {
                     'fapiPublic': 'https://fapi.asterdex.com/fapi/v1',
                     'fapiPublicV2': 'https://fapi.asterdex.com/fapi/v2',
                     'fapiPublicV3': 'https://fapi.asterdex.com/fapi/v3',
@@ -37,8 +38,8 @@ export default class asterdex extends binanceusdm {
                     'fapiPrivateV2': 'https://fapi.asterdex.com/fapi/v2',
                     'fapiPrivateV3': 'https://fapi.asterdex.com/fapi/v3',
                     'fapiData': 'https://fapi.asterdex.com/futures/data',
-                },
-            },
+                }),
+            }),
         });
     }
 }
