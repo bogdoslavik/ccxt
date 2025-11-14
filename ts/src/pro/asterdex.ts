@@ -1,43 +1,20 @@
 //  ---------------------------------------------------------------------------
 
-import binanceusdm from './binanceusdm.js';
+import asterdexRest from '../asterdex.js';
 
 //  ---------------------------------------------------------------------------
 
-export default class asterdex extends binanceusdm {
+export default class asterdex extends asterdexRest {
     describe (): any {
         const parent = super.describe ();
         return this.deepExtend (parent, {
-            'id': 'asterdex',
-            'name': 'AsterDEX',
-            'dex': true,
             'urls': this.deepExtend (parent['urls'], {
-                'logo': 'https://www.asterdex.com/images/logo.svg',
-                'www': 'https://www.asterdex.com',
-                'doc': [
-                    'https://docs.asterdex.com/product/asterex-pro/api/api-documentation',
-                    'https://github.com/asterdex/api-docs',
-                ],
-                'api_management': 'https://www.asterdex.com/en/api-management',
                 'api': this.deepExtend (parent['urls']['api'], {
-                    'public': 'https://fapi.asterdex.com/fapi/v3',
-                    'private': 'https://fapi.asterdex.com/fapi/v3',
-                    'fapiPublic': 'https://fapi.asterdex.com/fapi/v1',
-                    'fapiPublicV2': 'https://fapi.asterdex.com/fapi/v2',
-                    'fapiPublicV3': 'https://fapi.asterdex.com/fapi/v3',
-                    'fapiPrivate': 'https://fapi.asterdex.com/fapi/v1',
-                    'fapiPrivateV2': 'https://fapi.asterdex.com/fapi/v2',
-                    'fapiPrivateV3': 'https://fapi.asterdex.com/fapi/v3',
-                    'fapiData': 'https://fapi.asterdex.com/futures/data',
-                }),
-                'test': this.deepExtend (parent['urls']['test'], {
-                    'fapiPublic': 'https://fapi.asterdex.com/fapi/v1',
-                    'fapiPublicV2': 'https://fapi.asterdex.com/fapi/v2',
-                    'fapiPublicV3': 'https://fapi.asterdex.com/fapi/v3',
-                    'fapiPrivate': 'https://fapi.asterdex.com/fapi/v1',
-                    'fapiPrivateV2': 'https://fapi.asterdex.com/fapi/v2',
-                    'fapiPrivateV3': 'https://fapi.asterdex.com/fapi/v3',
-                    'fapiData': 'https://fapi.asterdex.com/futures/data',
+                    'ws': this.deepExtend (parent['urls']['api']['ws'], {
+                        // https://docs.asterdex.com/product/aster-perpetual-pro/api/api-documentation#mark-price-stream-for-all-markets
+                        'future': 'wss://fstream.asterdex.com/ws',
+                        'combined': 'wss://fstream.asterdex.com/stream?streams=',
+                    }),
                 }),
             }),
         });
