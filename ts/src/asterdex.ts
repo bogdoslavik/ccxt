@@ -4,7 +4,7 @@ import Exchange from './abstract/asterdex.js';
 import { ExchangeError, AuthenticationError, BadSymbol, InvalidOrder, InsufficientFunds, OrderNotFound, RateLimitExceeded, DDoSProtection, BadRequest } from './base/errors.js';
 import { sha256 } from './static_dependencies/noble-hashes/sha256.js';
 import { TICK_SIZE } from './base/functions/number.js';
-import type { Market, Dict } from './base/types.js';
+import type { Market, Dict, Ticker, Tickers, OrderBook, Trade, OHLCV, FundingRate, FundingRates, FundingRateHistory, Str, Strings, OpenInterest, int } from './base/types.js';
 
 //  ---------------------------------------------------------------------------
 
@@ -449,6 +449,269 @@ export default class asterdex extends Exchange {
             },
             'info': market,
         } as Market;
+    }
+
+    async fetchTime (params = {}) {
+        const response = await this.publicGetTime (params);
+        this.logResponse ('fetchTime', response);
+        return this.safeInteger (response, 'serverTime');
+    }
+
+    parseTicker (ticker: Dict, market: Market = undefined): Ticker {
+        const symbol = this.safeSymbol (this.safeString (ticker, 'symbol'), market);
+        const timestamp = this.safeInteger2 (ticker, 'closeTime', 'time');
+        const last = this.safeString2 (ticker, 'lastPrice', 'price');
+        const open = this.safeString (ticker, 'openPrice');
+        const high = this.safeString (ticker, 'highPrice');
+        const low = this.safeString (ticker, 'lowPrice');
+        const baseVolume = this.safeString2 (ticker, 'volume', 'baseVolume');
+        const quoteVolume = this.safeString2 (ticker, 'quoteVolume', 'quoteVolume');
+        const bid = this.safeString (ticker, 'bidPrice');
+        const ask = this.safeString (ticker, 'askPrice');
+        const change = this.safeString (ticker, 'priceChange');
+        const percentage = this.safeString (ticker, 'priceChangePercent');
+        return this.safeTicker ({
+            'symbol': symbol,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'high': high,
+            'low': low,
+            'bid': bid,
+            'bidVolume': this.safeString (ticker, 'bidQty'),
+            'ask': ask,
+            'askVolume': this.safeString (ticker, 'askQty'),
+            'vwap': this.safeString (ticker, 'weightedAvgPrice'),
+            'open': open,
+            'close': last,
+            'last': last,
+            'previousClose': undefined,
+            'change': change,
+            'percentage': percentage,
+            'average': undefined,
+            'baseVolume': baseVolume,
+            'quoteVolume': quoteVolume,
+            'info': ticker,
+        }, market);
+    }
+
+    async fetchTicker (symbol: Str, params = {}): Promise<Ticker> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const request = {
+            'symbol': market['id'],
+        };
+        const response = await this.publicGetTicker24hr (this.extend (request, params));
+        this.logResponse ('fetchTicker', response);
+        return this.parseTicker (response, market);
+    }
+
+    async fetchTickers (symbols: Strings = undefined, params = {}): Promise<Tickers> {
+        await this.loadMarkets ();
+        const response = await this.publicGetTicker24hr (params);
+        this.logResponse ('fetchTickers', response);
+        return this.parseTickers (response, symbols);
+    }
+
+    async fetchBidsAsks (symbols: Strings = undefined, params = {}) {
+        await this.loadMarkets ();
+        const response = await this.publicGetTickerBookTicker (params);
+        this.logResponse ('fetchBidsAsks', response);
+        return this.parseTickers (response, symbols);
+    }
+
+    async fetchOrderBook (symbol: Str, limit: int = undefined, params = {}): Promise<OrderBook> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const request = {
+            'symbol': market['id'],
+        };
+        if (limit !== undefined) {
+            request['limit'] = limit;
+        }
+        const response = await this.publicGetDepth (this.extend (request, params));
+        this.logResponse ('fetchOrderBook', response);
+        return this.parseOrderBook (response, market['symbol'], this.safeInteger (response, 'T'));
+    }
+
+    parseTrade (trade: Dict, market: Market = undefined) {
+        const id = this.safeString2 (trade, 'a', 'id');
+        const orderId = this.safeString (trade, 'orderId');
+        const timestamp = this.safeInteger2 (trade, 'T', 'time');
+        const price = this.safeString2 (trade, 'p', 'price');
+        const amount = this.safeString2 (trade, 'q', 'qty');
+        const cost = this.safeString (trade, 'quoteQty');
+        const marketId = this.safeString (trade, 'symbol');
+        const symbol = this.safeSymbol (marketId, market);
+        const buyerMaker = this.safeBool2 (trade, 'm', 'isBuyerMaker');
+        const takerOrMaker = (buyerMaker === undefined) ? undefined : 'taker';
+        return this.safeTrade ({
+            'info': trade,
+            'id': id,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'symbol': symbol,
+            'order': orderId,
+            'type': undefined,
+            'side': (buyerMaker !== undefined) ? (buyerMaker ? 'sell' : 'buy') : undefined,
+            'takerOrMaker': takerOrMaker,
+            'price': price,
+            'amount': amount,
+            'cost': cost,
+            'fee': undefined,
+        }, market);
+    }
+
+    async fetchTrades (symbol: Str, limit: int = 100, params = {}): Promise<Trade[]> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const request = {
+            'symbol': market['id'],
+        };
+        if (limit !== undefined) {
+            request['limit'] = limit;
+        }
+        const response = await this.publicGetTrades (this.extend (request, params));
+        this.logResponse ('fetchTrades', response);
+        return this.parseTrades (response, market, undefined, limit);
+    }
+
+    parseOHLCV (ohlcv): OHLCV {
+        return [
+            this.safeInteger (ohlcv, 0),
+            this.safeNumber (ohlcv, 1),
+            this.safeNumber (ohlcv, 2),
+            this.safeNumber (ohlcv, 3),
+            this.safeNumber (ohlcv, 4),
+            this.safeNumber (ohlcv, 5),
+        ];
+    }
+
+    async fetchOHLCV (symbol: Str, timeframe = '1m', since: int = undefined, limit: int = 500, params = {}): Promise<OHLCV[]> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const request = {
+            'symbol': market['id'],
+            'interval': timeframe,
+        };
+        if (since !== undefined) {
+            request['startTime'] = since;
+        }
+        if (limit !== undefined) {
+            request['limit'] = limit;
+        }
+        const response = await this.publicGetKlines (this.extend (request, params));
+        this.logResponse ('fetchOHLCV', response);
+        return this.parseOHLCVs (response, market, timeframe, since, limit);
+    }
+
+    parseFundingRate (contract, market: Market = undefined): FundingRate {
+        const marketId = this.safeString (contract, 'symbol');
+        const symbol = this.safeSymbol (marketId, market);
+        const timestamp = this.safeInteger (contract, 'time');
+        return {
+            'info': contract,
+            'symbol': symbol,
+            'markPrice': this.safeNumber (contract, 'markPrice'),
+            'indexPrice': this.safeNumber (contract, 'indexPrice'),
+            'interestRate': this.safeNumber (contract, 'interestRate'),
+            'estimatedSettlePrice': this.safeNumber (contract, 'estimatedSettlePrice'),
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'fundingRate': this.safeNumber (contract, 'lastFundingRate'),
+            'fundingTimestamp': this.safeInteger (contract, 'nextFundingTime'),
+            'fundingDatetime': this.iso8601 (this.safeInteger (contract, 'nextFundingTime')),
+            'nextFundingRate': undefined,
+            'nextFundingTimestamp': this.safeInteger (contract, 'nextFundingTime'),
+            'nextFundingDatetime': this.iso8601 (this.safeInteger (contract, 'nextFundingTime')),
+            'previousFundingRate': undefined,
+            'previousFundingTimestamp': undefined,
+            'previousFundingDatetime': undefined,
+        };
+    }
+
+    async fetchFundingRate (symbol: Str, params = {}): Promise<FundingRate> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const request = {
+            'symbol': market['id'],
+        };
+        const response = await this.publicGetPremiumIndex (this.extend (request, params));
+        this.logResponse ('fetchFundingRate', response);
+        return this.parseFundingRate (response, market);
+    }
+
+    async fetchFundingRates (symbols: Strings = undefined, params = {}): Promise<FundingRates> {
+        await this.loadMarkets ();
+        const response = await this.publicGetPremiumIndex (params);
+        this.logResponse ('fetchFundingRates', response);
+        return this.parseFundingRates (response, symbols);
+    }
+
+    parseFundingRates (rates, symbols: Strings = undefined): FundingRates {
+        const result: FundingRate[] = [];
+        for (let i = 0; i < rates.length; i++) {
+            const entry = this.parseFundingRate (rates[i]);
+            result.push (entry);
+        }
+        const filtered = this.filterByArray (result, 'symbol', symbols);
+        return this.indexBy (filtered, 'symbol');
+    }
+
+    async fetchFundingRateHistory (symbol: Str, since: int = undefined, limit: int = undefined, params = {}): Promise<FundingRateHistory[]> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const request = {
+            'symbol': market['id'],
+        };
+        if (since !== undefined) {
+            request['startTime'] = since;
+        }
+        if (limit !== undefined) {
+            request['limit'] = limit;
+        }
+        const response = await this.publicGetFundingRate (this.extend (request, params));
+        this.logResponse ('fetchFundingRateHistory', response);
+        return this.parseFundingRateHistories (response, market, since, limit);
+    }
+
+    parseFundingRateHistories (rates, market: Market = undefined, since: int = undefined, limit: int = undefined): FundingRateHistory[] {
+        const result: FundingRateHistory[] = [];
+        for (let i = 0; i < rates.length; i++) {
+            const entry = rates[i];
+            const parsed = {
+                'info': entry,
+                'symbol': this.safeSymbol (this.safeString (entry, 'symbol'), market),
+                'fundingRate': this.safeNumber (entry, 'fundingRate'),
+                'timestamp': this.safeInteger (entry, 'fundingTime'),
+                'datetime': this.iso8601 (this.safeInteger (entry, 'fundingTime')),
+            };
+            result.push (parsed);
+        }
+        return this.filterBySinceLimit (result, since, limit, 'timestamp');
+    }
+
+    parseOpenInterest (interest, market: Market = undefined): OpenInterest {
+        const symbol = this.safeSymbol (this.safeString (interest, 'symbol'), market);
+        const timestamp = this.safeInteger (interest, 'time');
+        return {
+            'symbol': symbol,
+            'baseVolume': this.safeNumber (interest, 'openInterest'),
+            'quoteVolume': undefined,
+            'openInterestAmount': this.safeNumber (interest, 'openInterest'),
+            'openInterestValue': undefined,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'info': interest,
+        };
+    }
+
+    async fetchOpenInterest (symbol: Str, params = {}): Promise<OpenInterest> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const request = { 'symbol': market['id'] };
+        const response = await this.publicGetOpenInterest (this.extend (request, params));
+        this.logResponse ('fetchOpenInterest', response);
+        return this.parseOpenInterest (response, market);
     }
 
     sign (path: string, api: string = 'public', method: string = 'GET', params = {}, headers = undefined, body = undefined) {
