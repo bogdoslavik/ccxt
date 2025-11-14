@@ -42,9 +42,16 @@
 - **Live payload capture (pending)**: direct HTTPS/WebSocket calls to `fapi.asterdex.com`/`fstream.asterdex.com` still fail from this environment (DNS resolution returns `Could not resolve host`), so response samples in the code remain based on the published specs. Re-run curl/ws tests once outbound network access is restored to confirm production payloads.
 - **`fetchCurrencies` toggle**: Binance’s helper hits `sapi/capital/config/getall` and fails without valid keys, so AsterDEX inherits that behavior. Set `options.fetchCurrencies = false` to keep `loadMarkets()` public-only until we obtain working REST credentials.
 - **Standalone implementation**: dropped the `binanceusdm` inheritance chain; `ts/src/asterdex.ts` now extends the raw `Exchange` class with its own `describe()`, REST `api` map, `fetchMarkets`, `sign()`, and `handleErrors`. This avoids Binance-specific quirks (SAPI calls, demo flags) and keeps the code aligned with Aster’s actual `/fapi/v1` surface. Pro version now extends this standalone class.
+- **Listen key manager (done)**: Pro class now fetches and keeps alive the user-data `listenKey` via `fetchListenKey()` and a refresh timer, so private WS streams can reuse it once watcher methods are added.
 
 ## Open Questions / Next Steps
 - Confirm whether Aster exposes spot markets or only USDⓈ-M perpetuals; docs imply futures-only, but double-check for any `/dapi` or spot endpoints before coding `has` flags.
 - Identify sandbox vs. mainnet host overrides (docs reference only `fapi.asterdex.com`; verify if there’s testnet base like `https://testnet.fapi.asterdex.com` or HyperETH proxy).
 - Capture exact endpoint weights for account/trade APIs (orders, leverage, margin, income history, etc.) from the remaining sections before implementation.
 - Determine required broker/referral codes (if any) and whether CCXT should auto-set them similar to Hyperliquid/Paradex integrations.
+- **Private WebSocket streams (pending)**  
+  1. Implement parser for `ACCOUNT_UPDATE` to feed `watchBalance` + `watchPositions`.  
+  2. Parse `ORDER_TRADE_UPDATE` → reuse `parseOrder`/`parseTrade` to power `watchOrders` and `watchMyTrades`.  
+  3. Wire `watchBalance`, `watchPositions`, `watchOrders`, `watchMyTrades` to `watchPrivateStream` (which now reuses the refreshed listen key).  
+  4. Add caches (`ArrayCacheBySymbolById` for orders, `ArrayCache` for trades) and resolver logic similar to Binance Pro.  
+  5. After private WS is stable, extend CCXT Pro docs/tests accordingly.

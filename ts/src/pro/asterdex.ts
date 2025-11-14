@@ -1,7 +1,7 @@
 //  ---------------------------------------------------------------------------
 
 import asterdexRest from '../asterdex.js';
-import type { OrderBook, Trade, Ticker, Tickers, OHLCV, Int, Str, Strings } from '../base/types.js';
+import type { OrderBook, Trade, Ticker, Tickers, OHLCV, Int, Str, Strings, Dict } from '../base/types.js';
 
 //  ---------------------------------------------------------------------------
 
@@ -96,6 +96,17 @@ export default class asterdex extends asterdexRest {
         return this.parseTicker (data, market);
     }
 
+    async watchBalance (params = {}): Promise<Balances> {
+        await this.loadMarkets ();
+        return await this.watchPrivateStream ('balance', params);
+    }
+
+    async watchPrivateStream (messageHash: Str, params = {}) {
+        const listenKey = await this.getPrivateListenKey ();
+        const url = this.urls['api']['ws']['future'] + '/' + listenKey;
+        return await this.watch (url, messageHash, undefined, params);
+    }
+
     async getPrivateListenKey () {
         let listenKey = this.safeString (this.options, 'listenKey');
         if (listenKey === undefined) {
@@ -119,5 +130,32 @@ export default class asterdex extends asterdexRest {
                 this.options['listenKey'] = undefined;
             });
         }, delay);
+    }
+
+    handleMessage (client: Client, message: any) {
+        const event = this.safeString (message, 'e');
+        if (event === 'ACCOUNT_UPDATE') {
+            this.handleAccountUpdate (client, message);
+            return;
+        }
+        client.resolve (message, undefined);
+    }
+
+    handleAccountUpdate (client: Client, message: Dict) {
+        const data = this.safeDict (message, 'a', {});
+        const balances = this.safeList (data, 'B', []);
+        this.balance = this.safeValue (this.balance, 'info', this.balance);
+        const result = this.safeValue (this.balance, 'info', {});
+        for (let i = 0; i < balances.length; i++) {
+            const entry = balances[i];
+            const asset = this.safeString (entry, 'a');
+            const code = this.safeCurrencyCode (asset);
+            const account = this.account ();
+            account['total'] = this.safeString (entry, 'wb');
+            account['free'] = this.safeString (entry, 'cw');
+            this.balance[code] = account;
+        }
+        this.balance['info'] = message;
+        client.resolve (this.balance, 'balance');
     }
 }
