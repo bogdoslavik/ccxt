@@ -19,6 +19,7 @@ export default class asterdex extends asterdexRest {
             'has': this.deepExtend (parent['has'], {
                 'ws': true,
                 'watchTrades': true,
+                'watchAggTrades': true,
                 'watchTickers': true,
                 'watchTicker': true,
                 'watchOrderBook': true,
@@ -57,6 +58,18 @@ export default class asterdex extends asterdexRest {
         const market = this.market (symbol);
         const stream = this.formatPerpStream (market['id'], 'trade');
         const messageHash = 'trade:' + market['symbol'];
+        const trades = await this.watch (this.getStreamUrl (stream), messageHash, undefined, params);
+        if (this.newUpdates) {
+            limit = trades.getLimit (market['symbol'], limit);
+        }
+        return this.filterBySinceLimit (trades, since, limit, 'timestamp', true);
+    }
+
+    async watchAggTrades (symbol: string, since: Int = undefined, limit: Int = undefined, params = {}): Promise<Trade[]> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const stream = this.formatPerpStream (market['id'], 'aggTrade');
+        const messageHash = 'aggtrade:' + market['symbol'];
         const trades = await this.watch (this.getStreamUrl (stream), messageHash, undefined, params);
         if (this.newUpdates) {
             limit = trades.getLimit (market['symbol'], limit);
@@ -321,6 +334,21 @@ export default class asterdex extends asterdexRest {
         client.resolve (trades, messageHash);
     }
 
+    handlePublicAggTrade (client: Client, message, market) {
+        const symbol = market['symbol'];
+        this.trades = this.safeValue (this, 'trades', {});
+        let trades = this.safeValue (this.trades, symbol);
+        if (trades === undefined) {
+            const limit = this.safeInteger (this.options, 'tradesLimit', 1000);
+            trades = new ArrayCache (limit);
+            this.trades[symbol] = trades;
+        }
+        const parsed = this.parseWsPublicAggTrade (message, market);
+        trades.append (parsed);
+        const messageHash = 'aggtrade:' + symbol;
+        client.resolve (trades, messageHash);
+    }
+
     handlePublicTicker (client: Client, message, market) {
         const symbol = market['symbol'];
         const parsed = this.parseWsPublicTicker (message, market);
@@ -454,6 +482,32 @@ export default class asterdex extends asterdexRest {
         }, market);
     }
 
+    parseWsPublicAggTrade (trade, market = undefined): Trade {
+        const marketId = this.safeString (trade, 's');
+        const symbol = this.safeSymbol (marketId, market);
+        const timestamp = this.safeInteger2 (trade, 'T', 'E');
+        const isBuyerMaker = this.safeBool (trade, 'm');
+        let side = undefined;
+        let takerOrMaker = undefined;
+        if (isBuyerMaker !== undefined) {
+            side = isBuyerMaker ? 'sell' : 'buy';
+            takerOrMaker = isBuyerMaker ? 'maker' : 'taker';
+        }
+        return this.safeTrade ({
+            'info': trade,
+            'id': this.safeString (trade, 'a'),
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'symbol': symbol,
+            'order': undefined,
+            'type': undefined,
+            'side': side,
+            'takerOrMaker': takerOrMaker,
+            'price': this.safeString (trade, 'p'),
+            'amount': this.safeString (trade, 'q'),
+        }, market);
+    }
+
     parseWsBidAsk (ticker, market = undefined): Ticker {
         const symbol = this.safeSymbol (this.safeString (ticker, 's'), market);
         const timestamp = this.safeInteger2 (ticker, 'T', 'E');
@@ -543,7 +597,9 @@ export default class asterdex extends asterdexRest {
         const topic = lowerStream.slice (separatorIndex + 1);
         const marketId = marketIdLower.toUpperCase ();
         const market = this.safeMarket (marketId);
-        if (topic.startsWith ('trade')) {
+        if (topic.startsWith ('aggtrade')) {
+            this.handlePublicAggTrade (client, message, market);
+        } else if (topic.startsWith ('trade')) {
             this.handlePublicTrade (client, message, market);
         } else if (topic.startsWith ('ticker')) {
             this.handlePublicTicker (client, message, market);
