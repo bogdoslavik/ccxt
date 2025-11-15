@@ -3,7 +3,7 @@
 import asterdexRest from '../asterdex.js';
 import Client from '../base/ws/Client.js';
 import { ArgumentsRequired } from '../base/errors.js';
-import type { OrderBook, Trade, Ticker, Tickers, OHLCV, Int, Str, Strings, Dict, Balances } from '../base/types.js';
+import type { OrderBook, Trade, Ticker, Tickers, OHLCV, Int, Str, Strings, Dict, Balances, Liquidation } from '../base/types.js';
 
 //  ---------------------------------------------------------------------------
 
@@ -20,6 +20,9 @@ export default class asterdex extends asterdexRest {
                 'watchOrderBook': true,
                 'watchOHLCV': true,
                 'watchMarkPrice': true,
+                'watchBidsAsks': true,
+                'watchLiquidations': true,
+                'watchLiquidationsForSymbols': true,
             }),
             'urls': this.deepExtend (parent['urls'], {
                 'api': this.deepExtend (parent['urls']['api'], {
@@ -118,6 +121,37 @@ export default class asterdex extends asterdexRest {
         const stream = this.formatPerpStream (market['id'], 'markPrice@1s');
         const data = await this.watchPerpStreams ([ stream ], undefined, params);
         return this.parseTicker (data, market);
+    }
+
+    async watchBidsAsks (symbols: Strings = undefined, params = {}): Promise<Tickers> {
+        await this.loadMarkets ();
+        symbols = this.marketSymbols (symbols);
+        let streams = undefined;
+        if (symbols === undefined) {
+            streams = [ '!bookTicker' ];
+        } else {
+            streams = this.buildPerpStreamsFromSymbols (symbols, (marketId: Str) => this.formatPerpStream (marketId, 'bookTicker'));
+        }
+        return await this.watchPerpStreams (streams, { symbols }, params);
+    }
+
+    async watchLiquidations (symbol: string = undefined, params = {}): Promise<Liquidation[]> {
+        if (symbol === undefined) {
+            return await this.watchLiquidationsForSymbols (undefined, params);
+        }
+        return await this.watchLiquidationsForSymbols ([ symbol ], params);
+    }
+
+    async watchLiquidationsForSymbols (symbols: Strings = undefined, params = {}): Promise<Liquidation[]> {
+        await this.loadMarkets ();
+        let streams = undefined;
+        if (symbols === undefined) {
+            streams = [ '!forceOrder@arr' ];
+        } else {
+            symbols = this.marketSymbols (symbols);
+            streams = this.buildPerpStreamsFromSymbols (symbols, (marketId: Str) => this.formatPerpStream (marketId, 'forceOrder'));
+        }
+        return await this.watchPerpStreams (streams, { symbols }, params);
     }
 
     async watchBalance (params = {}): Promise<Balances> {
