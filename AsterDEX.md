@@ -49,6 +49,7 @@
 - **Liquidation streams (new)**: `watchLiquidations()` / `watchLiquidationsForSymbols()` now wire up `<symbol>@forceOrder` and `!forceOrder@arr`, parse payloads into `ArrayCache` instances, and expose them via `liquidations` message hashes (note: events only fire when the venue liquidates someone, so manual tests may idle until activity spikes).
 - **Diff order books (new)**: `watchOrderBook`/`watchOrderBookForSymbols` now reuse Binance’s diff logic—REST snapshot + buffered deltas with strict `U/u/pu` checks—so local books stay in sync without full rewrites, and `run-tests --ws ... 'watchOrderBook()'` completes under the 120 s WS timeout.
 - **Additional kline streams (new)**: added `watchMarkOHLCV`, `watchIndexOHLCV`, and `watchContinuousOHLCV` helpers plus composite/sentiment feeds (`watchCompositeIndex`, `watchGlobalLongShortAccountRatio`, `watchTopLongShort{Account,Position}Ratio`). They all share the same `handlePublicKline`/parser logic, so consuming mark/index/continuous candles mirrors `watchOHLCV`.
+- **Extended user-data events**: new `watchMarginCall()` and `watchAccountConfig()` listeners parse `MARGIN_CALL` (per-position warnings) and `ACCOUNT_CONFIG_UPDATE` (leverage/multi-asset toggles) so private clients stay synced with server-side config changes.
 - **Aggregated trades (new)**: added `watchAggTrades()` wired to `<symbol>@aggTrade`, plus `parseWsPublicAggTrade` so merged trade payloads share the same `ArrayCache`/filtering helpers as standard trades.
 - **Runner nuance**: wrap method names in quotes (e.g., `'watchOrders()'`) when invoking `run-tests --ws`; otherwise the harness interprets the bare token as an exchange id (e.g., `watchOrders`) and errors before the actual test.
 
@@ -63,6 +64,7 @@
 - `node run-tests --ws asterdex 'watchAggTrades()' BTC/USDT:USDT --ts`
 - *(best effort)* `node run-tests --ws asterdex 'watchLiquidations()' --ts`
 - *(best effort)* `node run-tests --ws asterdex 'watchMarkOHLCV()' BTC/USDT:USDT --ts`
+- *(best effort)* `node run-tests --ws asterdex 'watchMarginCall()' --ts`
 - `node run-tests --ws asterdex 'watchOrders()' BTC/USDT:USDT --ts`
 
 ## Open Questions / Next Steps

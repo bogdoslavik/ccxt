@@ -41,6 +41,8 @@ export default class asterdex extends asterdexRest {
                 'watchOrders': true,
                 'watchMyTrades': true,
                 'watchPositions': true,
+                'watchMarginCall': true,
+                'watchAccountConfig': true,
             }),
             'urls': this.deepExtend (parent['urls'], {
                 'api': this.deepExtend (parent['urls']['api'], {
@@ -449,6 +451,16 @@ export default class asterdex extends asterdexRest {
         return await this.watchPrivateStream ('balance', params);
     }
 
+    async watchMarginCall (params = {}) {
+        await this.loadMarkets ();
+        return await this.watchPrivateStream ('marginCall', params);
+    }
+
+    async watchAccountConfig (params = {}) {
+        await this.loadMarkets ();
+        return await this.watchPrivateStream ('accountConfig', params);
+    }
+
     async watchPrivateStream (messageHash: Str, params = {}) {
         this.checkRequiredCredentials (true);
         const listenKey = await this.getPrivateListenKey ();
@@ -500,6 +512,12 @@ export default class asterdex extends asterdexRest {
                     return;
                 } else if (event === 'listenKeyExpired') {
                     this.handleListenKeyExpired (client, message);
+                    return;
+                } else if (event === 'MARGIN_CALL') {
+                    this.handleMarginCall (client, message);
+                    return;
+                } else if (event === 'ACCOUNT_CONFIG_UPDATE') {
+                    this.handleAccountConfigUpdate (client, message);
                     return;
                 }
             } else {
@@ -698,6 +716,75 @@ export default class asterdex extends asterdexRest {
             'shortAccount': this.safeNumber (entry, 'shortAccount'),
             'longShortRatio': this.safeNumber2 (entry, 'longShortRatio', 'ratio'),
         };
+    }
+
+    handleMarginCall (client: Client, message: Dict) {
+        const positions = this.safeList (message, 'p', []);
+        const parsed = [];
+        for (let i = 0; i < positions.length; i++) {
+            parsed.push (this.parseMarginCall (positions[i]));
+        }
+        client.resolve (parsed, 'marginCall');
+        for (let i = 0; i < parsed.length; i++) {
+            const entry = parsed[i];
+            const symbol = this.safeString (entry, 'symbol');
+            if (symbol !== undefined) {
+                client.resolve (entry, 'marginCall:' + symbol);
+            }
+        }
+    }
+
+    parseMarginCall (position: Dict) {
+        const marketId = this.safeString (position, 's');
+        const market = this.safeMarket (marketId, undefined);
+        const symbol = market['symbol'];
+        const amount = this.safeNumber (position, 'pa');
+        let side = undefined;
+        if (amount !== undefined) {
+            if (amount > 0) {
+                side = 'long';
+            } else if (amount < 0) {
+                side = 'short';
+            }
+        }
+        return {
+            'info': position,
+            'symbol': symbol,
+            'positionSide': this.safeStringLower (position, 'ps'),
+            'contracts': amount,
+            'side': side,
+            'marginType': this.safeStringLower (position, 'mt'),
+            'isolatedWallet': this.safeNumber (position, 'iw'),
+            'markPrice': this.safeNumber (position, 'mp'),
+            'unrealizedPnl': this.safeNumber (position, 'up'),
+            'maintenanceMargin': this.safeNumber (position, 'mm'),
+        };
+    }
+
+    handleAccountConfigUpdate (client: Client, message: Dict) {
+        const result = [];
+        const ac = this.safeDict (message, 'ac');
+        if (Object.keys (ac).length > 0) {
+            result.push ({
+                'info': ac,
+                'type': 'leverage',
+                'symbol': this.safeSymbol (this.safeString (ac, 's'), undefined),
+                'leverage': this.safeInteger (ac, 'l'),
+            });
+        }
+        const ai = this.safeDict (message, 'ai');
+        if (Object.keys (ai).length > 0) {
+            result.push ({
+                'info': ai,
+                'type': 'multiAssetsMargin',
+                'key': this.safeString (ai, 'j'),
+                'enabled': this.safeBool2 (ai, 'c', 'C'),
+            });
+        }
+        if (result.length === 0) {
+            result.push ({ 'info': message });
+        }
+        client.resolve (result, 'accountConfig');
     }
 
     handlePublicKline (client: Client, message, market = undefined, timeframe: Str = undefined) {
