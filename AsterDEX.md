@@ -43,15 +43,23 @@
 - **`fetchCurrencies` toggle**: Binance’s helper hits `sapi/capital/config/getall` and fails without valid keys, so AsterDEX inherits that behavior. Set `options.fetchCurrencies = false` to keep `loadMarkets()` public-only until we obtain working REST credentials.
 - **Standalone implementation**: dropped the `binanceusdm` inheritance chain; `ts/src/asterdex.ts` now extends the raw `Exchange` class with its own `describe()`, REST `api` map, `fetchMarkets`, `sign()`, and `handleErrors`. This avoids Binance-specific quirks (SAPI calls, demo flags) and keeps the code aligned with Aster’s actual `/fapi/v1` surface. Pro version now extends this standalone class.
 - **Listen key manager (done)**: Pro class now fetches and keeps alive the user-data `listenKey` via `fetchListenKey()` and a refresh timer, so private WS streams can reuse it once watcher methods are added.
+- **Perp WS helper layer (new)**: Raw `/ws/<stream>` subscriptions now come straight from `formatPerpStream` + `getStreamUrl`, no SUBSCRIBE payloads involved. Stream-specific handlers (`handlePublicTrade`, `handleDepth`, `handlePublicKline`, `handleBookTicker`, `handleMarkPrice`) parse each payload into CCXT structures and append them to `ArrayCache`/`ArrayCacheByTimestamp`/order-book caches before resolving the corresponding `watch*` futures.
+- **Private WS coverage (new)**: Added caches plus `watchOrders`, `watchMyTrades`, and `watchPositions`. `ORDER_TRADE_UPDATE` feeds order/myTrade caches, `ACCOUNT_UPDATE` now emits both balance deltas and `P[]` position snapshots (pushed into `ArrayCacheBySymbolBySide`), and `listenKeyExpired` clears timers so the next watcher invocation fetches a fresh key.
+- **Public WS smoketests**: `node run-tests --ws asterdex 'watchTrades()' BTC/USDT:USDT --ts`, `watchTicker()`, `watchOrderBook()`, and `watchOHLCV()` now pass against the live AsterDEX endpoints.
+- **Runner nuance**: wrap method names in quotes (e.g., `'watchOrders()'`) when invoking `run-tests --ws`; otherwise the harness interprets the bare token as an exchange id (e.g., `watchOrders`) and errors before the actual test.
+
+## Testing Commands
+- `npm run lint`
+- `node run-tests --ts asterdex`
+- `node run-tests --ws asterdex 'watchTrades()' BTC/USDT:USDT --ts`
+- `node run-tests --ws asterdex 'watchTicker()' BTC/USDT:USDT --ts`
+- `node run-tests --ws asterdex 'watchOrderBook()' BTC/USDT:USDT --ts`
+- `node run-tests --ws asterdex 'watchOHLCV()' BTC/USDT:USDT --ts`
+- `node run-tests --ws asterdex 'watchOrders()' BTC/USDT:USDT --ts`
 
 ## Open Questions / Next Steps
 - Confirm whether Aster exposes spot markets or only USDⓈ-M perpetuals; docs imply futures-only, but double-check for any `/dapi` or spot endpoints before coding `has` flags.
 - Identify sandbox vs. mainnet host overrides (docs reference only `fapi.asterdex.com`; verify if there’s testnet base like `https://testnet.fapi.asterdex.com` or HyperETH proxy).
 - Capture exact endpoint weights for account/trade APIs (orders, leverage, margin, income history, etc.) from the remaining sections before implementation.
 - Determine required broker/referral codes (if any) and whether CCXT should auto-set them similar to Hyperliquid/Paradex integrations.
-- **Private WebSocket streams (pending)**  
-  1. Implement parser for `ACCOUNT_UPDATE` to feed `watchBalance` + `watchPositions`.  
-  2. Parse `ORDER_TRADE_UPDATE` → reuse `parseOrder`/`parseTrade` to power `watchOrders` and `watchMyTrades`.  
-  3. Wire `watchBalance`, `watchPositions`, `watchOrders`, `watchMyTrades` to `watchPrivateStream` (which now reuses the refreshed listen key).  
-  4. Add caches (`ArrayCacheBySymbolById` for orders, `ArrayCache` for trades) and resolver logic similar to Binance Pro.  
-  5. After private WS is stable, extend CCXT Pro docs/tests accordingly.
+- **Private WebSocket streams (done, needs live validation)** – balance + position updates ride `ACCOUNT_UPDATE`, order/trade caches come from `ORDER_TRADE_UPDATE`, and dedicated watchers (`watchBalance`, `watchPositions`, `watchOrders`, `watchMyTrades`) now surface those flows. Once live creds are available, re-run `node run-tests --ws asterdex watchOrders BTC/USDT:USDT` (etc.) to confirm production payloads and tweak cache limits if necessary.
