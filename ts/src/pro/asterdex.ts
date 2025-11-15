@@ -24,6 +24,7 @@ export default class asterdex extends asterdexRest {
                 'watchOrderBook': true,
                 'watchOHLCV': true,
                 'watchMarkPrice': true,
+                'watchMarkPrices': true,
                 'watchBidsAsks': true,
                 'watchLiquidations': false,
                 'watchLiquidationsForSymbols': false,
@@ -125,6 +126,24 @@ export default class asterdex extends asterdexRest {
         const stream = this.formatPerpStream (market['id'], 'markPrice@1s');
         const messageHash = 'markprice:' + market['symbol'];
         return await this.watch (this.getStreamUrl (stream), messageHash, undefined, params);
+    }
+
+    async watchMarkPrices (symbols: Strings = undefined, params = {}): Promise<Tickers> {
+        await this.loadMarkets ();
+        symbols = this.marketSymbols (symbols);
+        if (symbols === undefined || symbols.length === 0) {
+            const stream = '!markPrice@arr';
+            const messageHash = 'markprices';
+            return await this.watch (this.getStreamUrl (stream), messageHash, undefined, params);
+        }
+        const tickers = await Promise.all (symbols.map ((symbol) => this.watchMarkPrice (symbol, params)));
+        const result: Tickers = {};
+        for (let i = 0; i < tickers.length; i++) {
+            const ticker = tickers[i];
+            const tickerSymbol = ticker['symbol'];
+            result[tickerSymbol] = ticker;
+        }
+        return result;
     }
 
     async watchBidsAsks (symbols: Strings = undefined, params = {}): Promise<Tickers> {
@@ -327,6 +346,24 @@ export default class asterdex extends asterdexRest {
         client.resolve (parsed, messageHash);
     }
 
+    handleMarkPriceArray (client: Client, message) {
+        if (!Array.isArray (message)) {
+            return;
+        }
+        const result: Tickers = {};
+        for (let i = 0; i < message.length; i++) {
+            const entry = message[i];
+            const marketId = this.safeString (entry, 's');
+            const market = this.safeMarket (marketId);
+            const parsed = this.parseWsMarkPrice (entry, market);
+            const symbol = parsed['symbol'];
+            result[symbol] = parsed;
+            const symbolHash = 'markprice:' + symbol;
+            client.resolve (parsed, symbolHash);
+        }
+        client.resolve (result, 'markprices');
+    }
+
     handlePublicKline (client: Client, message, market, timeframe: Str) {
         const symbol = market['symbol'];
         this.ohlcvs = this.safeValue (this, 'ohlcvs', {});
@@ -490,7 +527,11 @@ export default class asterdex extends asterdexRest {
     handlePublicStream (client: Client, stream: Str, message: Dict) {
         const lowerStream = stream.toLowerCase ();
         if (lowerStream[0] === '!') {
-            client.resolve (message, stream);
+            if (lowerStream === '!markprice@arr') {
+                this.handleMarkPriceArray (client, message);
+            } else {
+                client.resolve (message, stream);
+            }
             return;
         }
         const separatorIndex = lowerStream.indexOf ('@');

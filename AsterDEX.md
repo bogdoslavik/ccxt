@@ -45,7 +45,7 @@
 - **Listen key manager (done)**: Pro class now fetches and keeps alive the user-data `listenKey` via `fetchListenKey()` and a refresh timer, so private WS streams can reuse it once watcher methods are added.
 - **Perp WS helper layer (new)**: Raw `/ws/<stream>` subscriptions now come straight from `formatPerpStream` + `getStreamUrl`, no SUBSCRIBE payloads involved. Stream-specific handlers (`handlePublicTrade`, `handleDepth`, `handlePublicKline`, `handleBookTicker`, `handleMarkPrice`) parse each payload into CCXT structures and append them to `ArrayCache`/`ArrayCacheByTimestamp`/order-book caches before resolving the corresponding `watch*` futures.
 - **Private WS coverage (new)**: Added caches plus `watchOrders`, `watchMyTrades`, and `watchPositions`. `ORDER_TRADE_UPDATE` feeds order/myTrade caches, `ACCOUNT_UPDATE` now emits both balance deltas and `P[]` position snapshots (pushed into `ArrayCacheBySymbolBySide`), and `listenKeyExpired` clears timers so the next watcher invocation fetches a fresh key.
-- **Public WS smoketests**: `node run-tests --ws asterdex 'watchTrades()' BTC/USDT:USDT --ts`, `watchTicker()`, `watchOrderBook()`, and `watchOHLCV()` now pass against the live AsterDEX endpoints.
+- **Public WS smoketests**: `node run-tests --ws asterdex 'watchTrades()' BTC/USDT:USDT --ts`, `watchTicker()`, `watchOrderBook()`, `watchOHLCV()`, and the new global `watchMarkPrices()` flow (no symbol argument) all pass against the live endpoints.
 - **Runner nuance**: wrap method names in quotes (e.g., `'watchOrders()'`) when invoking `run-tests --ws`; otherwise the harness interprets the bare token as an exchange id (e.g., `watchOrders`) and errors before the actual test.
 
 ## Testing Commands
@@ -55,6 +55,7 @@
 - `node run-tests --ws asterdex 'watchTicker()' BTC/USDT:USDT --ts`
 - `node run-tests --ws asterdex 'watchOrderBook()' BTC/USDT:USDT --ts`
 - `node run-tests --ws asterdex 'watchOHLCV()' BTC/USDT:USDT --ts`
+- `node run-tests --ws asterdex 'watchMarkPrices()' --ts`
 - `node run-tests --ws asterdex 'watchOrders()' BTC/USDT:USDT --ts`
 
 ## Open Questions / Next Steps
