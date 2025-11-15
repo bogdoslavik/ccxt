@@ -23,6 +23,7 @@ export default class asterdex extends asterdexRest {
                 'watchTickers': true,
                 'watchTicker': true,
                 'watchOrderBook': true,
+                'watchOrderBookForSymbols': true,
                 'watchOHLCV': true,
                 'watchMarkPrice': true,
                 'watchMarkPrices': true,
@@ -80,19 +81,108 @@ export default class asterdex extends asterdexRest {
     async watchOrderBook (symbol: string, limit: Int = undefined, params = {}): Promise<OrderBook> {
         await this.loadMarkets ();
         const market = this.market (symbol);
-        let depth = 'depth5';
-        if (limit !== undefined) {
+        limit = (limit === undefined) ? this.safeInteger (this.options, 'watchOrderBookLimit', 1000) : limit;
+        let depth = 'depth20';
+        if (limit <= 5) {
+            depth = 'depth5';
+        } else if (limit <= 10) {
+            depth = 'depth10';
+        }
+        const stream = this.formatPerpStream (market['id'], depth + '@100ms');
+        const url = this.getStreamUrl (stream);
+        const messageHash = 'orderbook:' + market['symbol'];
+        this.prepareOrderBook (market['symbol'], limit, params);
+        const client = this.client (url);
+        this.spawn (this.fetchOrderBookSnapshot, client, { 'symbol': market['symbol'], 'limit': limit, 'params': params });
+        return await this.watch (url, messageHash, undefined, params);
+    }
+
+    async watchOrderBookForSymbols (symbols: string[], limit: Int = undefined, params = {}): Promise<OrderBook> {
+        await this.loadMarkets ();
+        symbols = this.marketSymbols (symbols);
+        if ((symbols === undefined) || (symbols.length === 0)) {
+            throw new ArgumentsRequired (this.id + ' watchOrderBookForSymbols() requires a non-empty array of symbols');
+        }
+        const markets = symbols.map ((symbol) => this.market (symbol));
+        const streamHashes = [];
+        const urls = [];
+        for (let i = 0; i < markets.length; i++) {
+            const market = markets[i];
+            limit = (limit === undefined) ? this.safeInteger (this.options, 'watchOrderBookLimit', 1000) : limit;
+            let depth = 'depth20';
             if (limit <= 5) {
                 depth = 'depth5';
             } else if (limit <= 10) {
                 depth = 'depth10';
-            } else {
-                depth = 'depth20';
             }
+            const stream = this.formatPerpStream (market['id'], depth + '@100ms');
+            streamHashes.push (stream);
+            urls.push (this.getStreamUrl (stream));
+            this.prepareOrderBook (market['symbol'], limit, params);
         }
-        const stream = this.formatPerpStream (market['id'], depth + '@100ms');
-        const messageHash = 'orderbook:' + market['symbol'];
-        return await this.watch (this.getStreamUrl (stream), messageHash, undefined, params);
+        const promises = urls.map ((url, index) => {
+            const market = markets[index];
+            const messageHash = 'orderbook:' + market['symbol'];
+            const client = this.client (url);
+            this.spawn (this.fetchOrderBookSnapshot, client, { 'symbol': market['symbol'], 'limit': limit, 'params': params });
+            return this.watch (url, messageHash, undefined, params);
+        });
+        const results = await Promise.all (promises);
+        return results[results.length - 1];
+    }
+
+    prepareOrderBook (symbol: Str, limit: Int = undefined, params = {}) {
+        if (this.orderbooks === undefined) {
+            this.orderbooks = {};
+        }
+        let orderbook = this.safeValue (this.orderbooks, symbol);
+        if (orderbook === undefined) {
+            orderbook = this.orderBook ({}, limit);
+            orderbook['symbol'] = symbol;
+            orderbook['cache'] = [];
+            this.orderbooks[symbol] = orderbook;
+        }
+        orderbook['limit'] = limit;
+        orderbook['params'] = params;
+        orderbook['cache'] = this.safeValue (orderbook, 'cache', []);
+        return orderbook;
+    }
+
+    async fetchOrderBookSnapshot (client: Client, subscription) {
+        const symbol = this.safeString (subscription, 'symbol');
+        const limit = this.safeInteger (subscription, 'limit', this.safeInteger (this.options, 'watchOrderBookLimit', 1000));
+        const params = this.safeValue (subscription, 'params');
+        const messageHash = 'orderbook:' + symbol;
+        try {
+            const snapshot = await this.fetchOrderBook (symbol, limit, params);
+            const orderbook = this.safeValue (this.orderbooks, symbol);
+            if (orderbook === undefined) {
+                return;
+            }
+            orderbook.reset (snapshot);
+            orderbook['nonce'] = this.safeInteger (snapshot, 'nonce');
+            const cache = this.safeValue (orderbook, 'cache', []);
+            orderbook['cache'] = [];
+            for (let i = 0; i < cache.length; i++) {
+                const message = cache[i];
+                this.handleDepth (client, message);
+            }
+            client.resolve (orderbook, messageHash);
+        } catch (error) {
+            client.reject (error, messageHash);
+        }
+    }
+
+    reloadOrderBook (client: Client, messageHash: Str, symbol: Str) {
+        const orderbook = this.safeValue (this.orderbooks, symbol);
+        if (orderbook === undefined) {
+            return;
+        }
+        orderbook['nonce'] = undefined;
+        orderbook['cache'] = [];
+        const limit = this.safeInteger (orderbook, 'limit');
+        const params = this.safeValue (orderbook, 'params', {});
+        this.spawn (this.loadOrderBookSnapshot, client, messageHash, symbol, limit, params);
     }
 
     async watchTicker (symbol: string, params = {}): Promise<Ticker> {
@@ -425,8 +515,10 @@ export default class asterdex extends asterdexRest {
 
     getLiquidationsCache (symbol: Str = undefined) {
         const key = (symbol === undefined) ? 'all' : symbol;
-        const caches = this.safeValue (this, 'liquidations', {});
-        const cache = this.safeValue (caches, key);
+        if (this.liquidations === undefined) {
+            this.liquidations = {};
+        }
+        const cache = this.safeValue (this.liquidations, key);
         if (cache === undefined) {
             return [];
         }
@@ -450,22 +542,41 @@ export default class asterdex extends asterdexRest {
         client.resolve (cache, messageHash);
     }
 
-    handleDepth (client: Client, message, market) {
-        const symbol = market['symbol'];
-        this.orderbooks = this.safeValue (this, 'orderbooks', {});
-        if (!(symbol in this.orderbooks)) {
-            const newOrderBook = this.orderBook (); // empty
-            newOrderBook['symbol'] = symbol;
-            this.orderbooks[symbol] = newOrderBook;
-        }
-        const orderbook = this.orderbooks[symbol];
-        const timestamp = this.safeInteger (message, 'E');
-        const bids = this.safeList (message, 'b', []);
-        const asks = this.safeList (message, 'a', []);
-        const snapshot = this.parseOrderBook ({ 'bids': bids, 'asks': asks }, symbol, timestamp);
-        orderbook.reset (snapshot);
+    handleDepth (client: Client, message, market = undefined) {
+        const marketId = this.safeString (message, 's');
+        const marketInner = this.safeMarket (marketId, market);
+        const symbol = marketInner['symbol'];
         const messageHash = 'orderbook:' + symbol;
-        client.resolve (orderbook, messageHash);
+        const orderbook = this.safeValue (this.orderbooks, symbol);
+        if (orderbook === undefined) {
+            return;
+        }
+        const cache = this.safeValue (orderbook, 'cache', []);
+        const timestamp = this.safeInteger (message, 'E');
+        orderbook['timestamp'] = timestamp;
+        orderbook['datetime'] = this.iso8601 (timestamp);
+        const nonce = this.safeInteger (orderbook, 'nonce');
+        if (nonce === undefined) {
+            cache.push (message);
+            orderbook['cache'] = cache;
+            return;
+        }
+        try {
+            const U = this.safeInteger (message, 'U');
+            const u = this.safeInteger (message, 'u');
+            const pu = this.safeInteger (message, 'pu');
+            if (u >= orderbook['nonce']) {
+                if ((U <= orderbook['nonce']) && (u >= orderbook['nonce']) || (pu === orderbook['nonce'])) {
+                    this.handleOrderBookMessage (message, orderbook);
+                    client.resolve (orderbook, messageHash);
+                } else {
+                    this.reloadOrderBook (client, messageHash, symbol);
+                }
+            }
+        } catch (error) {
+            this.reloadOrderBook (client, messageHash, symbol);
+            client.reject (error, messageHash);
+        }
     }
 
     handleForceOrder (client: Client, message, market = undefined) {
@@ -633,6 +744,27 @@ export default class asterdex extends asterdexRest {
             'contracts': this.safeNumber (liquidation, 'q'),
             'side': this.safeStringLower (liquidation, 'S'),
         } as Liquidation;
+    }
+
+    handleOrderBookMessage (message, orderbook) {
+        const bids = this.safeList (message, 'b', []);
+        const asks = this.safeList (message, 'a', []);
+        this.handleDeltas (orderbook['bids'], bids);
+        this.handleDeltas (orderbook['asks'], asks);
+        const u = this.safeInteger (message, 'u');
+        orderbook['nonce'] = u;
+    }
+
+    handleDeltas (bookside, deltas) {
+        for (let i = 0; i < deltas.length; i++) {
+            this.handleDelta (bookside, deltas[i]);
+        }
+    }
+
+    handleDelta (bookside, delta) {
+        const price = this.safeNumber (delta, 0);
+        const amount = this.safeNumber (delta, 1);
+        bookside.store (price, amount);
     }
 
     getStreamNameFromUrl (url: Str) {
