@@ -48,6 +48,7 @@
 - **Public WS smoketests**: `node run-tests --ws asterdex 'watchTrades()' BTC/USDT:USDT --ts`, `watchAggTrades()`, `watchTicker()`, `watchOrderBook()`, `watchOHLCV()`, and the new global `watchMarkPrices()` flow (no symbol argument) all pass against the live endpoints.
 - **Liquidation streams (new)**: `watchLiquidations()` / `watchLiquidationsForSymbols()` now wire up `<symbol>@forceOrder` and `!forceOrder@arr`, parse payloads into `ArrayCache` instances, and expose them via `liquidations` message hashes (note: events only fire when the venue liquidates someone, so manual tests may idle until activity spikes).
 - **Diff order books (new)**: `watchOrderBook`/`watchOrderBookForSymbols` now reuse Binance’s diff logic—REST snapshot + buffered deltas with strict `U/u/pu` checks—so local books stay in sync without full rewrites, and `run-tests --ws ... 'watchOrderBook()'` completes under the 120 s WS timeout.
+- **Additional kline streams (new)**: added `watchMarkOHLCV`, `watchIndexOHLCV`, and `watchContinuousOHLCV` helpers plus composite/sentiment feeds (`watchCompositeIndex`, `watchGlobalLongShortAccountRatio`, `watchTopLongShort{Account,Position}Ratio`). They all share the same `handlePublicKline`/parser logic, so consuming mark/index/continuous candles mirrors `watchOHLCV`.
 - **Aggregated trades (new)**: added `watchAggTrades()` wired to `<symbol>@aggTrade`, plus `parseWsPublicAggTrade` so merged trade payloads share the same `ArrayCache`/filtering helpers as standard trades.
 - **Runner nuance**: wrap method names in quotes (e.g., `'watchOrders()'`) when invoking `run-tests --ws`; otherwise the harness interprets the bare token as an exchange id (e.g., `watchOrders`) and errors before the actual test.
 
@@ -61,6 +62,7 @@
 - `node run-tests --ws asterdex 'watchMarkPrices()' --ts`
 - `node run-tests --ws asterdex 'watchAggTrades()' BTC/USDT:USDT --ts`
 - *(best effort)* `node run-tests --ws asterdex 'watchLiquidations()' --ts`
+- *(best effort)* `node run-tests --ws asterdex 'watchMarkOHLCV()' BTC/USDT:USDT --ts`
 - `node run-tests --ws asterdex 'watchOrders()' BTC/USDT:USDT --ts`
 
 ## Open Questions / Next Steps
