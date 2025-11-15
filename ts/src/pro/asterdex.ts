@@ -4,7 +4,7 @@ import asterdexRest from '../asterdex.js';
 import Client from '../base/ws/Client.js';
 import { ArrayCache, ArrayCacheByTimestamp, ArrayCacheBySymbolById, ArrayCacheBySymbolBySide } from '../base/ws/Cache.js';
 import { ArgumentsRequired } from '../base/errors.js';
-import type { OrderBook, Trade, Ticker, Tickers, OHLCV, Int, Str, Strings, Dict, Balances, Order, Position, Market } from '../base/types.js';
+import type { OrderBook, Trade, Ticker, Tickers, OHLCV, Int, Str, Strings, Dict, Balances, Order, Position, Market, Liquidation } from '../base/types.js';
 
 //  ---------------------------------------------------------------------------
 
@@ -27,8 +27,8 @@ export default class asterdex extends asterdexRest {
                 'watchMarkPrice': true,
                 'watchMarkPrices': true,
                 'watchBidsAsks': true,
-                'watchLiquidations': false,
-                'watchLiquidationsForSymbols': false,
+                'watchLiquidations': true,
+                'watchLiquidationsForSymbols': true,
                 'watchOrders': true,
                 'watchMyTrades': true,
                 'watchPositions': true,
@@ -180,6 +180,37 @@ export default class asterdex extends asterdexRest {
         const stream = this.formatPerpStream (market['id'], 'bookTicker');
         const messageHash = 'bidask:' + market['symbol'];
         return await this.watch (this.getStreamUrl (stream), messageHash, undefined, params);
+    }
+
+    async watchLiquidations (symbol: string = undefined, since: Int = undefined, limit: Int = undefined, params = {}): Promise<Liquidation[]> {
+        await this.loadMarkets ();
+        let messageHash = 'liquidations';
+        let stream = '!forceOrder@arr';
+        if (symbol !== undefined) {
+            const market = this.market (symbol);
+            messageHash = 'liquidations:' + market['symbol'];
+            stream = this.formatPerpStream (market['id'], 'forceOrder');
+        }
+        await this.watch (this.getStreamUrl (stream), messageHash, undefined, params);
+        const cache = this.getLiquidationsCache (symbol);
+        return this.filterBySinceLimit (cache, since, limit, 'timestamp', true);
+    }
+
+    async watchLiquidationsForSymbols (symbols: Strings = undefined, since: Int = undefined, limit: Int = undefined, params = {}): Promise<Liquidation[]> {
+        await this.loadMarkets ();
+        if (symbols === undefined) {
+            return await this.watchLiquidations (undefined, since, limit, params);
+        }
+        symbols = this.marketSymbols (symbols);
+        await Promise.all (symbols.map ((symbol) => this.watchLiquidations (symbol, since, limit, params)));
+        let result: Liquidation[] = [];
+        for (let i = 0; i < symbols.length; i++) {
+            const symbol = symbols[i];
+            const cache = this.getLiquidationsCache (symbol);
+            const filtered = this.filterBySinceLimit (cache, since, limit, 'timestamp', true);
+            result = this.arrayConcat (result, filtered);
+        }
+        return result;
     }
 
     async watchOrders (symbol: string = undefined, since: Int = undefined, limit: Int = undefined, params = {}): Promise<Order[]> {
@@ -392,6 +423,16 @@ export default class asterdex extends asterdexRest {
         client.resolve (result, 'markprices');
     }
 
+    getLiquidationsCache (symbol: Str = undefined) {
+        const key = (symbol === undefined) ? 'all' : symbol;
+        const caches = this.safeValue (this, 'liquidations', {});
+        const cache = this.safeValue (caches, key);
+        if (cache === undefined) {
+            return [];
+        }
+        return cache;
+    }
+
     handlePublicKline (client: Client, message, market, timeframe: Str) {
         const symbol = market['symbol'];
         this.ohlcvs = this.safeValue (this, 'ohlcvs', {});
@@ -427,10 +468,39 @@ export default class asterdex extends asterdexRest {
         client.resolve (orderbook, messageHash);
     }
 
-    handleForceOrder (client: Client, message, market) {
-        const symbol = market['symbol'];
-        const messageHash = 'liquidations:' + symbol;
-        client.resolve (message, messageHash);
+    handleForceOrder (client: Client, message, market = undefined) {
+        const entries = Array.isArray (message) ? message : [ message ];
+        if (this.liquidations === undefined) {
+            this.liquidations = {};
+        }
+        const globalKey = 'all';
+        let globalCache = this.safeValue (this.liquidations, globalKey);
+        if (globalCache === undefined) {
+            const limit = this.safeInteger (this.options, 'liquidationsLimit', 1000);
+            globalCache = new ArrayCache (limit);
+            this.liquidations[globalKey] = globalCache;
+        }
+        for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            const rawLiquidation = this.safeDict (entry, 'o', entry);
+            const marketId = this.safeString (rawLiquidation, 's');
+            const marketInfo = this.safeMarket (marketId, market);
+            const symbol = marketInfo['symbol'];
+            const liquidation = this.parseWsLiquidation (rawLiquidation, marketInfo);
+            if (symbol === undefined || liquidation === undefined) {
+                continue;
+            }
+            let cache = this.safeValue (this.liquidations, symbol);
+            if (cache === undefined) {
+                const limit = this.safeInteger (this.options, 'liquidationsLimit', 1000);
+                cache = new ArrayCache (limit);
+                this.liquidations[symbol] = cache;
+            }
+            cache.append (liquidation);
+            globalCache.append (liquidation);
+            client.resolve (cache, 'liquidations:' + symbol);
+        }
+        client.resolve (globalCache, 'liquidations');
     }
 
     parseWsPublicTrade (trade, market = undefined): Trade {
@@ -549,6 +619,22 @@ export default class asterdex extends asterdexRest {
         ];
     }
 
+    parseWsLiquidation (liquidation, market: Market = undefined): Liquidation {
+        const marketId = this.safeString (liquidation, 's');
+        const parsedMarket = this.safeMarket (marketId, market);
+        const symbol = parsedMarket['symbol'];
+        const timestamp = this.safeInteger (liquidation, 'T');
+        return {
+            'info': liquidation,
+            'symbol': symbol,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'price': this.safeNumber (liquidation, 'p'),
+            'contracts': this.safeNumber (liquidation, 'q'),
+            'side': this.safeStringLower (liquidation, 'S'),
+        } as Liquidation;
+    }
+
     getStreamNameFromUrl (url: Str) {
         if (url === undefined) {
             return undefined;
@@ -583,6 +669,8 @@ export default class asterdex extends asterdexRest {
         if (lowerStream[0] === '!') {
             if (lowerStream === '!markprice@arr') {
                 this.handleMarkPriceArray (client, message);
+            } else if (lowerStream === '!forceorder@arr') {
+                this.handleForceOrder (client, message);
             } else {
                 client.resolve (message, stream);
             }

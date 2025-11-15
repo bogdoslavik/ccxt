@@ -46,6 +46,7 @@
 - **Perp WS helper layer (new)**: Raw `/ws/<stream>` subscriptions now come straight from `formatPerpStream` + `getStreamUrl`, no SUBSCRIBE payloads involved. Stream-specific handlers (`handlePublicTrade`, `handleDepth`, `handlePublicKline`, `handleBookTicker`, `handleMarkPrice`) parse each payload into CCXT structures and append them to `ArrayCache`/`ArrayCacheByTimestamp`/order-book caches before resolving the corresponding `watch*` futures.
 - **Private WS coverage (new)**: Added caches plus `watchOrders`, `watchMyTrades`, and `watchPositions`. `ORDER_TRADE_UPDATE` feeds order/myTrade caches, `ACCOUNT_UPDATE` now emits both balance deltas and `P[]` position snapshots (pushed into `ArrayCacheBySymbolBySide`), and `listenKeyExpired` clears timers so the next watcher invocation fetches a fresh key.
 - **Public WS smoketests**: `node run-tests --ws asterdex 'watchTrades()' BTC/USDT:USDT --ts`, `watchAggTrades()`, `watchTicker()`, `watchOrderBook()`, `watchOHLCV()`, and the new global `watchMarkPrices()` flow (no symbol argument) all pass against the live endpoints.
+- **Liquidation streams (new)**: `watchLiquidations()` / `watchLiquidationsForSymbols()` now wire up `<symbol>@forceOrder` and `!forceOrder@arr`, parse payloads into `ArrayCache` instances, and expose them via `liquidations` message hashes (note: events only fire when the venue liquidates someone, so manual tests may idle until activity spikes).
 - **Aggregated trades (new)**: added `watchAggTrades()` wired to `<symbol>@aggTrade`, plus `parseWsPublicAggTrade` so merged trade payloads share the same `ArrayCache`/filtering helpers as standard trades.
 - **Runner nuance**: wrap method names in quotes (e.g., `'watchOrders()'`) when invoking `run-tests --ws`; otherwise the harness interprets the bare token as an exchange id (e.g., `watchOrders`) and errors before the actual test.
 
@@ -58,6 +59,7 @@
 - `node run-tests --ws asterdex 'watchOHLCV()' BTC/USDT:USDT --ts`
 - `node run-tests --ws asterdex 'watchMarkPrices()' --ts`
 - `node run-tests --ws asterdex 'watchAggTrades()' BTC/USDT:USDT --ts`
+- *(best effort)* `node run-tests --ws asterdex 'watchLiquidations()' --ts`
 - `node run-tests --ws asterdex 'watchOrders()' BTC/USDT:USDT --ts`
 
 ## Open Questions / Next Steps
