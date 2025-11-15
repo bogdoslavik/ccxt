@@ -13,6 +13,7 @@ export default class asterdex extends asterdexRest {
     orders: ArrayCacheBySymbolById | undefined;
     myTrades: ArrayCache | undefined;
     positions: ArrayCacheBySymbolBySide | undefined;
+    compositeIndex: Tickers | undefined;
     describe (): any {
         const parent = super.describe ();
         return this.deepExtend (parent, {
@@ -249,7 +250,7 @@ export default class asterdex extends asterdexRest {
         orderbook['cache'] = [];
         const limit = this.safeInteger (orderbook, 'limit');
         const params = this.safeValue (orderbook, 'params', {});
-        this.spawn (this.loadOrderBookSnapshot, client, messageHash, symbol, limit, params);
+        this.spawn (this.fetchOrderBookSnapshot, client, { 'symbol': symbol, 'limit': limit, 'params': params });
     }
 
     async watchTicker (symbol: string, params = {}): Promise<Ticker> {
@@ -649,17 +650,20 @@ export default class asterdex extends asterdexRest {
         }
     }
 
-    parseCompositeIndex (entry, market = undefined) {
+    parseCompositeIndex (entry, market = undefined): Ticker {
         const marketId = this.safeString (entry, 's');
-        const symbol = this.safeSymbol (marketId, market);
+        const parsedMarket = this.safeMarket (marketId, market);
+        const symbol = parsedMarket['symbol'];
         const timestamp = this.safeInteger2 (entry, 'E', 'time');
-        return {
+        const price = this.safeString (entry, 'p');
+        return this.safeTicker ({
             'info': entry,
             'symbol': symbol,
             'timestamp': timestamp,
             'datetime': this.iso8601 (timestamp),
-            'price': this.safeNumber (entry, 'p'),
-        } as Ticker;
+            'last': price,
+            'close': price,
+        }, parsedMarket);
     }
 
     handleSentiment (client: Client, message, scope: Str) {
