@@ -50,6 +50,7 @@ import alpaca from  './src/alpaca.js'
 import apex from  './src/apex.js'
 import arkham from  './src/arkham.js'
 import ascendex from  './src/ascendex.js'
+import asterdex from  './src/asterdex.js'
 import backpack from  './src/backpack.js'
 import bequant from  './src/bequant.js'
 import bigone from  './src/bigone.js'
@@ -160,6 +161,7 @@ import alpacaPro from  './src/pro/alpaca.js'
 import apexPro from  './src/pro/apex.js'
 import arkhamPro from  './src/pro/arkham.js'
 import ascendexPro from  './src/pro/ascendex.js'
+import asterdexPro from  './src/pro/asterdex.js'
 import backpackPro from  './src/pro/backpack.js'
 import bequantPro from  './src/pro/bequant.js'
 import binancePro from  './src/pro/binance.js'
@@ -236,6 +238,7 @@ const exchanges = {
     'apex':                   apex,
     'arkham':                 arkham,
     'ascendex':               ascendex,
+    'asterdex':               asterdex,
     'backpack':               backpack,
     'bequant':                bequant,
     'bigone':                 bigone,
@@ -346,6 +349,7 @@ const pro = {
     'apex':                   apexPro,
     'arkham':                 arkhamPro,
     'ascendex':               ascendexPro,
+    'asterdex':               asterdexPro,
     'backpack':               backpackPro,
     'bequant':                bequantPro,
     'binance':                binancePro,
@@ -564,6 +568,7 @@ export {
     apex,
     arkham,
     ascendex,
+    asterdex,
     backpack,
     bequant,
     bigone,

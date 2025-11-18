@@ -6,5 +6,9 @@
         "options": {
             "defaultType": "spot"
         }
+    },
+    "asterdex": {
+        "apiKey": "c15dbecdfc7b61c9ba6b849a6c4d02708f218fc43b12f8dfca4bf5da715d1244",
+        "secret": "decf7cce80b60d96331ed92fb65f309c4b2d164b8be31bc92719256c7f4ba0ec"
     }
 }
