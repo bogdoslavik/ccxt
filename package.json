@@ -28,6 +28,8 @@
   },
   "readme": "README.md",
   "scripts": {
+    "test:paradex": "node run-tests --ts paradex",
+    "test:paradex:fn": "node run-tests --ws paradex 'watchFundingRate()' BTC/USD:USDC --ts",
     "test:asterdex": "node run-tests --ts asterdex",
     "test:asterdex:fn": "node run-tests --ws asterdex 'watchOrders()' BTC/USDT:USDT --ts",
     "instrument": "nyc instrument js/ jsInstrumented/",

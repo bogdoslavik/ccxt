@@ -5,7 +5,7 @@ import { Precise } from './base/Precise.js';
 import Exchange from './abstract/paradex.js';
 import { ExchangeError, PermissionDenied, AuthenticationError, BadRequest, ArgumentsRequired, OperationRejected, InvalidOrder } from './base/errors.js';
 import { TICK_SIZE } from './base/functions/number.js';
-import type { Str, Num, Dict, Int, Market, OrderType, OrderSide, Order, OrderBook, Strings, Ticker, Tickers, Trade, Balances, Currency, Transaction, OHLCV, Position, int, MarginMode, Leverage, Greeks } from './base/types.js';
+import type { Str, Num, Dict, Int, Market, OrderType, OrderSide, Order, OrderBook, Strings, Ticker, Tickers, Trade, Balances, Currency, Transaction, OHLCV, Position, int, MarginMode, Leverage, Greeks, FundingRate, FundingRates } from './base/types.js';
 import { ecdsa } from './base/functions/crypto.js';
 import { keccak_256 as keccak } from './static_dependencies/noble-hashes/sha3.js';
 import { secp256k1 } from './static_dependencies/noble-curves/secp256k1.js';
@@ -836,6 +836,44 @@ export default class paradex extends Exchange {
             'markPrice': this.safeString (ticker, 'mark_price'),
             'info': ticker,
         }, market);
+    }
+
+    parseFundingRate (ticker: Dict, market: Market = undefined): FundingRate {
+        const marketId = this.safeString (ticker, 'symbol');
+        market = this.safeMarket (marketId, market);
+        const symbol = market['symbol'];
+        const timestamp = this.safeInteger (ticker, 'created_at');
+        const markPrice = this.safeNumber (ticker, 'mark_price');
+        const indexPrice = this.safeNumber2 (ticker, 'oracle_price', 'underlying_price');
+        return {
+            'info': ticker,
+            'symbol': symbol,
+            'markPrice': markPrice,
+            'indexPrice': indexPrice,
+            'interestRate': undefined,
+            'estimatedSettlePrice': undefined,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'fundingRate': this.safeNumber (ticker, 'funding_rate'),
+            'fundingTimestamp': undefined,
+            'fundingDatetime': undefined,
+            'nextFundingRate': undefined,
+            'nextFundingTimestamp': undefined,
+            'nextFundingDatetime': undefined,
+            'previousFundingRate': undefined,
+            'previousFundingTimestamp': undefined,
+            'previousFundingDatetime': undefined,
+        };
+    }
+
+    parseFundingRates (response, symbols: Strings = undefined): FundingRates {
+        const result: FundingRate[] = [];
+        for (let i = 0; i < response.length; i++) {
+            const entry = response[i];
+            const rate = this.parseFundingRate (entry);
+            result.push (rate);
+        }
+        return this.filterByArray (result, 'symbol', symbols);
     }
 
     /**

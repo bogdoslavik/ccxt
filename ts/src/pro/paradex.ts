@@ -3,7 +3,7 @@
 
 import paradexRest from '../paradex.js';
 import { ArrayCache } from '../base/ws/Cache.js';
-import type { Int, Trade, Dict, OrderBook, Ticker, Strings, Tickers, Bool } from '../base/types.js';
+import type { Int, Trade, Dict, OrderBook, Ticker, Strings, Tickers, Bool, FundingRate, FundingRates } from '../base/types.js';
 import Client from '../base/ws/Client.js';
 
 //  ---------------------------------------------------------------------------
@@ -15,6 +15,8 @@ export default class paradex extends paradexRest {
                 'ws': true,
                 'watchTicker': true,
                 'watchTickers': true,
+                'watchFundingRate': true,
+                'watchFundingRates': true,
                 'watchOrderBook': true,
                 'watchOrders': false,
                 'watchTrades': true,
@@ -262,6 +264,63 @@ export default class paradex extends paradexRest {
         return this.filterByArray (this.tickers, 'symbol', symbols);
     }
 
+    /**
+     * @method
+     * @name paradex#watchFundingRate
+     * @description watch the current funding rate for a specific market
+     * @see https://docs.api.testnet.paradex.trade/#sub-markets_summary-operation
+     * @param {string} symbol unified market symbol
+     * @param {object} [params] extra parameters specific to the exchange API endpoint
+     * @returns {object} a [funding rate structure]{@link https://docs.ccxt.com/#/?id=funding-rate-structure}
+     */
+    async watchFundingRate (symbol: string, params = {}): Promise<FundingRate> {
+        await this.loadMarkets ();
+        const fundingRates = await this.watchFundingRates ([ symbol ], params);
+        return this.safeValue (fundingRates, symbol);
+    }
+
+    /**
+     * @method
+     * @name paradex#watchFundingRates
+     * @description watch the funding rates for a list of markets or all markets
+     * @see https://docs.api.testnet.paradex.trade/#sub-markets_summary-operation
+     * @param {string[]} symbols list of unified market symbols
+     * @param {object} [params] extra parameters specific to the exchange API endpoint
+     * @returns {object} a dictionary of [funding rate structures]{@link https://docs.ccxt.com/#/?id=funding-rate-structure} indexed by market symbol
+     */
+    async watchFundingRates (symbols: Strings = undefined, params = {}): Promise<FundingRates> {
+        await this.loadMarkets ();
+        symbols = this.marketSymbols (symbols);
+        const channel = 'markets_summary';
+        const url = this.urls['api']['ws'];
+        const request: Dict = {
+            'jsonrpc': '2.0',
+            'method': 'subscribe',
+            'params': {
+                'channel': channel,
+            },
+        };
+        const messageHashes = [];
+        if ((symbols === undefined) || (symbols.length === 0)) {
+            messageHashes.push ('fundingrates');
+        } else {
+            for (let i = 0; i < symbols.length; i++) {
+                const messageHash = 'fundingrate:' + symbols[i];
+                messageHashes.push (messageHash);
+            }
+        }
+        const fundingRate = await this.watchMultiple (url, messageHashes, this.deepExtend (request, params), messageHashes);
+        if (this.newUpdates) {
+            const result: Dict = {};
+            result[fundingRate['symbol']] = fundingRate;
+            return result;
+        }
+        if (this.fundingRates === undefined) {
+            this.fundingRates = {};
+        }
+        return this.filterByArray (this.fundingRates, 'symbol', symbols);
+    }
+
     handleTicker (client: Client, message) {
         //
         //     {
@@ -298,6 +357,13 @@ export default class paradex extends paradexRest {
         this.tickers[symbol] = ticker;
         client.resolve (ticker, channel);
         client.resolve (ticker, messageHash);
+        const fundingRate = this.parseFundingRate (data, market);
+        if (this.fundingRates === undefined) {
+            this.fundingRates = {};
+        }
+        this.fundingRates[symbol] = fundingRate;
+        client.resolve (fundingRate, 'fundingrates');
+        client.resolve (fundingRate, 'fundingrate:' + symbol);
         return message;
     }
 
