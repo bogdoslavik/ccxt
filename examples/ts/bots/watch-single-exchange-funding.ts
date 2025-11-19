@@ -1,7 +1,7 @@
 import ccxt from '../../../ts/ccxt.ts';
 
 const cliExchange = process.argv[2];
-const EXCHANGE_ID = cliExchange ?? process.env.FUNDING_EXCHANGE ?? 'lighter';
+const EXCHANGE_ID = cliExchange ?? process.env.FUNDING_EXCHANGE ?? 'extended';
 const RETRY_DELAY_MS = 5000;
 const MAX_LOG_ENTRIES = Number (process.env.FUNDING_LOG_SAMPLE ?? '5');
 const SPEED = process.env.FUNDING_SPEED;
@@ -54,7 +54,7 @@ async function main () {
             const payload = await exchange.watchFundingRates (undefined, params);
             const entries = normalizeFundingPayload (payload);
             const ts = new Date ().toISOString ();
-            console.log (`[${ts}] RAW ${EXCHANGE_ID} payload sample:`, entries.slice (0, Math.min (entries.length, MAX_LOG_ENTRIES)));
+            // console.log (`[${ts}] RAW ${EXCHANGE_ID} payload sample:`, entries.slice (0, Math.min (entries.length, MAX_LOG_ENTRIES)));
             for (let i = 0; i < entries.length; i++) {
                 const entry = entries[i];
                 const symbol = entry?.symbol;

@@ -10,6 +10,7 @@ const EXCHANGES = [
     { id: 'asterdex', instance: new ccxt.pro.asterdex ({ enableRateLimit: true }), filter: (_symbol: string) => true },
     { id: 'hyperliquid', instance: new ccxt.pro.hyperliquid ({ enableRateLimit: true }), filter: (_symbol: string) => true },
     { id: 'lighter', instance: new ccxt.pro.lighter ({ enableRateLimit: true }), filter: (_symbol: string) => true },
+    { id: 'extended', instance: new ccxt.pro.extended ({ enableRateLimit: true }), filter: (_symbol: string) => true },
 ];
 
 type FundingRow = {

@@ -51,6 +51,7 @@ import apex from  './src/apex.js'
 import arkham from  './src/arkham.js'
 import ascendex from  './src/ascendex.js'
 import asterdex from  './src/asterdex.js'
+import extended from  './src/extended.js'
 import lighter from  './src/lighter.js'
 import backpack from  './src/backpack.js'
 import bequant from  './src/bequant.js'
@@ -163,6 +164,7 @@ import apexPro from  './src/pro/apex.js'
 import arkhamPro from  './src/pro/arkham.js'
 import ascendexPro from  './src/pro/ascendex.js'
 import asterdexPro from  './src/pro/asterdex.js'
+import extendedPro from  './src/pro/extended.js'
 import lighterPro from  './src/pro/lighter.js'
 import backpackPro from  './src/pro/backpack.js'
 import bequantPro from  './src/pro/bequant.js'
@@ -241,6 +243,7 @@ const exchanges = {
     'arkham':                 arkham,
     'ascendex':               ascendex,
     'asterdex':               asterdex,
+    'extended':               extended,
     'lighter':                lighter,
     'backpack':               backpack,
     'bequant':                bequant,
@@ -353,6 +356,7 @@ const pro = {
     'arkham':                 arkhamPro,
     'ascendex':               ascendexPro,
     'asterdex':               asterdexPro,
+    'extended':               extendedPro,
     'lighter':                lighterPro,
     'backpack':               backpackPro,
     'bequant':                bequantPro,
@@ -573,6 +577,7 @@ export {
     arkham,
     ascendex,
     asterdex,
+    extended,
     lighter,
     backpack,
     bequant,
