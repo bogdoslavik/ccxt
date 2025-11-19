@@ -1,7 +1,7 @@
 import ccxt from '../../../ts/ccxt.ts';
 
 const cliExchange = process.argv[2];
-const EXCHANGE_ID = cliExchange ?? process.env.FUNDING_EXCHANGE ?? 'asterdex';
+const EXCHANGE_ID = cliExchange ?? process.env.FUNDING_EXCHANGE ?? 'hyperliquid';
 const RETRY_DELAY_MS = 5000;
 const MAX_LOG_ENTRIES = Number (process.env.FUNDING_LOG_SAMPLE ?? '5');
 const SPEED = process.env.FUNDING_SPEED;

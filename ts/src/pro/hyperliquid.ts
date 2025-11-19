@@ -2,7 +2,7 @@
 
 import hyperliquidRest from '../hyperliquid.js';
 import Client from '../base/ws/Client.js';
-import { Int, Str, Market, OrderBook, Trade, OHLCV, Order, Dict, Strings, Ticker, Tickers, type Num, OrderType, OrderSide, type OrderRequest, Bool } from '../base/types.js';
+import { Int, Str, Market, OrderBook, Trade, OHLCV, Order, Dict, Strings, Ticker, Tickers, type Num, OrderType, OrderSide, type OrderRequest, Bool, FundingRate, FundingRates } from '../base/types.js';
 import { ArrayCache, ArrayCacheByTimestamp, ArrayCacheBySymbolById } from '../base/ws/Cache.js';
 
 //  ---------------------------------------------------------------------------
@@ -24,6 +24,8 @@ export default class hyperliquid extends hyperliquidRest {
                 'watchOrders': true,
                 'watchTicker': true,
                 'watchTickers': true,
+                'watchFundingRate': true,
+                'watchFundingRates': true,
                 'watchTrades': true,
                 'watchTradesForSymbols': false,
                 'watchPosition': false,
@@ -351,6 +353,45 @@ export default class hyperliquid extends hyperliquidRest {
         return this.tickers;
     }
 
+    async watchFundingRate (symbol: string, params = {}): Promise<FundingRate> {
+        const rates = await this.watchFundingRates ([ symbol ], params);
+        return this.safeValue (rates, symbol);
+    }
+
+    async watchFundingRates (symbols: Strings = undefined, params = {}): Promise<FundingRates> {
+        await this.loadMarkets ();
+        symbols = this.marketSymbols (symbols, undefined, true);
+        const messageHash = 'fundingrates';
+        const url = this.urls['api']['ws']['public'];
+        const request: Dict = {
+            'method': 'subscribe',
+            'subscription': {
+                'type': 'webData2',
+                'user': '0x0000000000000000000000000000000000000000',
+            },
+        };
+        const fundingRates = await this.watch (url, messageHash, this.extend (request, params), messageHash);
+        if (this.newUpdates) {
+            return this.filterFundingRatesBySymbols (fundingRates, symbols);
+        }
+        this.fundingRates = this.safeValue (this, 'fundingRates', {});
+        return this.filterFundingRatesBySymbols (this.fundingRates, symbols);
+    }
+
+    filterFundingRatesBySymbols (rates: FundingRates = {}, symbols: Strings = undefined) {
+        if (symbols === undefined || symbols.length === 0) {
+            return rates;
+        }
+        const result: FundingRates = {};
+        for (let i = 0; i < symbols.length; i++) {
+            const symbol = symbols[i];
+            if ((rates !== undefined) && (symbol in rates)) {
+                result[symbol] = rates[symbol];
+            }
+        }
+        return result;
+    }
+
     /**
      * @method
      * @name hyperliquid#unWatchTickers
@@ -464,6 +505,8 @@ export default class hyperliquid extends hyperliquidRest {
         const rawData = this.safeDict (message, 'data', {});
         const spotAssets = this.safeList (rawData, 'spotAssetCtxs', []);
         const parsedTickers = [];
+        const fundingResult: FundingRates = {};
+        this.fundingRates = this.safeValue (this, 'fundingRates', {});
         for (let i = 0; i < spotAssets.length; i++) {
             const assetObject = spotAssets[i];
             const marketId = this.safeString (assetObject, 'coin');
@@ -488,9 +531,20 @@ export default class hyperliquid extends hyperliquidRest {
             const ticker = this.parseWsTicker (data, market);
             this.tickers[symbol] = ticker;
             parsedTickers.push (ticker);
+            const fundingRate = this.parseFundingRate (data, market);
+            this.fundingRates[symbol] = fundingRate;
+            fundingResult[symbol] = fundingRate;
         }
         const tickers = this.indexBy (parsedTickers, 'symbol');
         client.resolve (tickers, 'tickers');
+        const fundingSymbols = Object.keys (fundingResult);
+        if (fundingSymbols.length > 0) {
+            client.resolve (fundingResult, 'fundingrates');
+            for (let i = 0; i < fundingSymbols.length; i++) {
+                const symbol = fundingSymbols[i];
+                client.resolve (fundingResult[symbol], 'fundingrate:' + symbol);
+            }
+        }
     }
 
     parseWsTicker (rawTicker, market: Market = undefined): Ticker {

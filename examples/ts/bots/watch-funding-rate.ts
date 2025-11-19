@@ -1,4 +1,4 @@
-import ccxt from '../../../ts/ccxt.ts';
+import ccxt from '../../../ts/ccxt';
 
 const TOP_N = 10;
 const PRINT_INTERVAL_MS = 1000;
@@ -6,6 +6,7 @@ const RETRY_DELAY_MS = 5000;
 const EXCHANGES = [
     { id: 'paradex', instance: new ccxt.pro.paradex ({ enableRateLimit: true }), filter: (symbol: string) => symbol.indexOf ('-') === -1 },
     { id: 'asterdex', instance: new ccxt.pro.asterdex ({ enableRateLimit: true }), filter: (_symbol: string) => true },
+    { id: 'hyperliquid', instance: new ccxt.pro.hyperliquid ({ enableRateLimit: true }), filter: (_symbol: string) => true },
 ];
 
 type FundingRow = {
