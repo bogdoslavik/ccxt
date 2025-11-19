@@ -293,6 +293,7 @@ export default class asterdex extends Exchange {
                 'warnOnFetchOrdersWithoutSymbol': true,
                 'warnOnFetchFundingRateHistoryWithoutSymbol': true,
                 'log': false,
+                'fundingRateIntervalHours': 8,
             },
             'exceptions': {
                 'exact': {

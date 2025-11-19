@@ -3,6 +3,8 @@ import ccxt from '../../../ts/ccxt';
 const TOP_N = 10;
 const PRINT_INTERVAL_MS = 1000;
 const RETRY_DELAY_MS = 5000;
+const TARGET_INTERVAL_HOURS = 24;
+const DEFAULT_NATIVE_INTERVAL_HOURS = 8;
 const EXCHANGES = [
     { id: 'paradex', instance: new ccxt.pro.paradex ({ enableRateLimit: true }), filter: (symbol: string) => symbol.indexOf ('-') === -1 },
     { id: 'asterdex', instance: new ccxt.pro.asterdex ({ enableRateLimit: true }), filter: (_symbol: string) => true },
@@ -13,6 +15,8 @@ const EXCHANGES = [
 type FundingRow = {
     symbol: string;
     rate: number;
+    normalizedRate?: number;
+    nativeIntervalHours?: number;
 };
 
 const delay = (ms: number) => new Promise ((resolve) => setTimeout (resolve, ms));
@@ -56,6 +60,7 @@ async function main () {
 
     const consumeExchange = async (exchangeEntry) => {
         const store = exchangeState.get (exchangeEntry.id);
+        const nativeInterval = exchangeEntry.instance.options?.fundingRateIntervalHours ?? DEFAULT_NATIVE_INTERVAL_HOURS;
         while (true) {
             try {
                 const payload = await exchangeEntry.instance.watchFundingRates ();
@@ -66,7 +71,8 @@ async function main () {
                     const symbol = entry?.symbol;
                     const rate = Number (entry?.fundingRate);
                     if ((symbol !== undefined) && Number.isFinite (rate) && exchangeEntry.filter (symbol)) {
-                        store.set (symbol, { symbol, rate });
+                        const normalized = (nativeInterval > 0) ? rate * (TARGET_INTERVAL_HOURS / nativeInterval) : undefined;
+                        store.set (symbol, { symbol, rate, normalizedRate: normalized, nativeIntervalHours: nativeInterval });
                     }
                 }
             } catch (err) {
@@ -81,10 +87,18 @@ async function main () {
             const snapshot = EXCHANGES.map ((entry) => {
                 const store = exchangeState.get (entry.id);
                 const rows = Array.from (store.values ())
-                    .sort ((a, b) => b.rate - a.rate)
+                    .sort ((a, b) => {
+                        const aValue = (a.normalizedRate !== undefined) ? a.normalizedRate : a.rate;
+                        const bValue = (b.normalizedRate !== undefined) ? b.normalizedRate : b.rate;
+                        return (bValue ?? -Infinity) - (aValue ?? -Infinity);
+                    })
                     .slice (0, TOP_N);
                 const symbolWidth = rows.reduce ((acc, row) => Math.max (acc, row.symbol.length), entry.id.length);
-                const rateWidth = rows.reduce ((acc, row) => Math.max (acc, ((row.rate >= 0 ? '+' : '') + row.rate.toString ()).length), 5);
+                const rateWidth = rows.reduce ((acc, row) => {
+                    const percent = (row.normalizedRate !== undefined) ? row.normalizedRate * 100 : (row.rate !== undefined ? row.rate * 100 : undefined);
+                    const formatted = (percent !== undefined && Number.isFinite (percent)) ? ((percent >= 0 ? '+' : '') + percent.toFixed (4) + '%') : 'n/a';
+                    return Math.max (acc, formatted.length);
+                }, 8);
                 return { entry, rows, symbolWidth, rateWidth, columnWidth: symbolWidth + 1 + rateWidth };
             });
             const hasData = snapshot.some ((col) => col.rows.length > 0);
@@ -94,7 +108,7 @@ async function main () {
                 continue;
             }
             const header = snapshot.map ((col) => col.entry.id.toUpperCase ().padEnd (col.columnWidth)).join (' | ');
-            console.log ('\nTop funding rates @ ' + new Date ().toISOString ());
+            console.log (`\nTop funding rates (${TARGET_INTERVAL_HOURS}h normalized) @ ` + new Date ().toISOString ());
             console.log (header);
             for (let i = 0; i < TOP_N; i++) {
                 const cells = snapshot.map ((col) => {
@@ -102,7 +116,9 @@ async function main () {
                     if (row === undefined) {
                         return ''.padEnd (col.columnWidth);
                     }
-                    const rateStr = (row.rate >= 0 ? '+' : '') + row.rate.toString ();
+                    const normalized = (row.normalizedRate !== undefined) ? row.normalizedRate : row.rate;
+                    const percent = (normalized !== undefined) ? normalized * 100 : undefined;
+                    const rateStr = (percent !== undefined && Number.isFinite (percent)) ? ((percent >= 0 ? '+' : '') + percent.toFixed (4) + '%') : 'n/a';
                     return `${row.symbol.padEnd (col.symbolWidth)} ${rateStr.padEnd (col.columnWidth - col.symbolWidth)}`;
                 });
                 console.log (cells.join (' | '));

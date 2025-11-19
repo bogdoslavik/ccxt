@@ -304,6 +304,7 @@ export default class paradex extends Exchange {
             'options': {
                 'paradexAccount': undefined, // add {"privateKey": "copy Paradex Private Key from UI", "publicKey": "used when onboard (optional)", "address": "copy Paradex Address from UI"}
                 'broker': 'CCXT',
+                'fundingRateIntervalHours': 8,
             },
             'features': {
                 'spot': undefined,

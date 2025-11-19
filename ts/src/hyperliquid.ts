@@ -236,6 +236,7 @@ export default class hyperliquid extends Exchange {
                     'XAUT0': 'XAUT',
                     'UXPL': 'XPL',
                 },
+                'fundingRateIntervalHours': 1,
             },
             'features': {
                 'default': {

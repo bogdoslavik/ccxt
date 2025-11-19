@@ -53,6 +53,7 @@ export default class lighter extends Exchange {
             },
             'options': {
                 'defaultType': 'swap',
+                'fundingRateIntervalHours': 1,
             },
         });
     }

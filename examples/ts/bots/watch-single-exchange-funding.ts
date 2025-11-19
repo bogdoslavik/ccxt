@@ -6,6 +6,8 @@ const RETRY_DELAY_MS = 5000;
 const MAX_LOG_ENTRIES = Number (process.env.FUNDING_LOG_SAMPLE ?? '5');
 const SPEED = process.env.FUNDING_SPEED;
 const INCLUDE_OPTIONS = process.env.FUNDING_INCLUDE_OPTIONS === '1';
+const TARGET_INTERVAL_HOURS = 24;
+const DEFAULT_NATIVE_INTERVAL_HOURS = 8;
 const delay = (ms: number) => new Promise ((resolve) => setTimeout (resolve, ms));
 
 const normalizeFundingPayload = (payload): any[] => {
@@ -45,6 +47,7 @@ async function main () {
     console.log (`${EXCHANGE_ID} loaded ${exchange.symbols.length} symbols`);
 
     const params = (SPEED !== undefined) ? { speed: SPEED } : {};
+    const nativeIntervalHours = exchange.options?.fundingRateIntervalHours ?? DEFAULT_NATIVE_INTERVAL_HOURS;
 
     while (true) {
         try {
@@ -62,8 +65,10 @@ async function main () {
                 if (!INCLUDE_OPTIONS && symbol.includes ('-')) {
                     continue;
                 }
-                const rateStr = (rate >= 0 ? '+' : '') + rate.toString ();
-                console.log (`${EXCHANGE_ID} ${symbol} fundingRate=${rateStr} markPrice=${entry?.markPrice ?? entry?.mark_price} indexPrice=${entry?.indexPrice ?? entry?.index_price}`);
+                const normalized = (nativeIntervalHours > 0) ? rate * (TARGET_INTERVAL_HOURS / nativeIntervalHours) : undefined;
+                const percentStr = (normalized !== undefined && Number.isFinite (normalized)) ? ((normalized >= 0 ? '+' : '') + (normalized * 100).toFixed (4) + `% / ${TARGET_INTERVAL_HOURS}h`) : 'n/a';
+                const rawStr = (rate >= 0 ? '+' : '') + rate.toString ();
+                console.log (`${EXCHANGE_ID} ${symbol} fundingRate=${percentStr} raw=${rawStr} markPrice=${entry?.markPrice ?? entry?.mark_price} indexPrice=${entry?.indexPrice ?? entry?.index_price}`);
             }
         } catch (err) {
             console.error (EXCHANGE_ID + ' watchFundingRates error:', err);
