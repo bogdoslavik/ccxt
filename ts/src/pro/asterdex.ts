@@ -4,7 +4,7 @@ import asterdexRest from '../asterdex.js';
 import Client from '../base/ws/Client.js';
 import { ArrayCache, ArrayCacheByTimestamp, ArrayCacheBySymbolById, ArrayCacheBySymbolBySide } from '../base/ws/Cache.js';
 import { ArgumentsRequired } from '../base/errors.js';
-import type { OrderBook, Trade, Ticker, Tickers, OHLCV, Int, Str, Strings, Dict, Balances, Order, Position, Market, Liquidation } from '../base/types.js';
+import type { OrderBook, Trade, Ticker, Tickers, OHLCV, Int, Str, Strings, Dict, Balances, Order, Position, Market, Liquidation, FundingRate, FundingRates } from '../base/types.js';
 
 //  ---------------------------------------------------------------------------
 
@@ -31,6 +31,8 @@ export default class asterdex extends asterdexRest {
                 'watchContinuousOHLCV': true,
                 'watchMarkPrice': true,
                 'watchMarkPrices': true,
+                'watchFundingRate': true,
+                'watchFundingRates': true,
                 'watchBidsAsks': true,
                 'watchCompositeIndex': true,
                 'watchGlobalLongShortAccountRatio': true,
@@ -321,6 +323,44 @@ export default class asterdex extends asterdexRest {
         return result;
     }
 
+    async watchFundingRate (symbol: string, params = {}): Promise<FundingRate> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const stream = this.formatPerpStream (market['id'], 'markPrice@1s');
+        const messageHash = 'fundingrate:' + market['symbol'];
+        return await this.watch (this.getStreamUrl (stream), messageHash, undefined, params);
+    }
+
+    async watchFundingRates (symbols: Strings = undefined, params = {}): Promise<FundingRates> {
+        await this.loadMarkets ();
+        symbols = this.marketSymbols (symbols);
+        if (symbols === undefined || symbols.length === 0) {
+            let stream = '!markPrice@arr';
+            const speed = this.safeString2 (params, 'speed', 'updateSpeed');
+            params = this.omit (params, [ 'speed', 'updateSpeed' ]);
+            if (speed !== undefined) {
+                const normalized = speed.toLowerCase ();
+                if (normalized === '1s' || normalized === '1000ms' || normalized === 'fast') {
+                    stream = '!markPrice@arr@1s';
+                }
+            }
+            const messageHash = 'fundingrates';
+            if (this.safeValue (this.options, 'watchFundingRatesDebug')) {
+                const url = this.getStreamUrl (stream);
+                console.log (this.id, 'watchFundingRates aggregate subscription stream', stream, 'url', url, 'messageHash', messageHash);
+            }
+            return await this.watch (this.getStreamUrl (stream), messageHash, undefined, params);
+        }
+        const rates = await Promise.all (symbols.map ((symbol) => this.watchFundingRate (symbol, params)));
+        const result: FundingRates = {};
+        for (let i = 0; i < rates.length; i++) {
+            const rate = rates[i];
+            const rateSymbol = rate['symbol'];
+            result[rateSymbol] = rate;
+        }
+        return result;
+    }
+
     async watchBidsAsks (symbols: Strings = undefined, params = {}): Promise<Tickers> {
         await this.loadMarkets ();
         symbols = this.marketSymbols (symbols);
@@ -494,6 +534,17 @@ export default class asterdex extends asterdexRest {
     }
 
     handleMessage (client: Client, message: any) {
+        if (Array.isArray (message)) {
+            const url = client.url;
+            const streamId = this.getStreamNameFromUrl (url);
+            if (this.safeValue (this.options, 'watchFundingRatesDebug')) {
+                console.log (this.id, 'handleMessage array payload from url', url, 'streamId', streamId, 'length', message.length);
+            }
+            if (streamId !== undefined) {
+                this.handlePublicStream (client, streamId, message);
+                return;
+            }
+        }
         const stream = this.safeString (message, 'stream');
         if (stream !== undefined) {
             const data = this.safeValue (message, 'data', message);
@@ -615,13 +666,28 @@ export default class asterdex extends asterdexRest {
         const parsed = this.parseWsMarkPrice (message, market);
         const messageHash = 'markprice:' + symbol;
         client.resolve (parsed, messageHash);
+        if (this.safeValue (this.options, 'watchFundingRatesDebug')) {
+            console.log (this.id, 'handleMarkPriceMessage raw', message);
+        }
+        const fundingRate = this.parseWsFundingRate (message, market);
+        if (fundingRate !== undefined) {
+            this.fundingRates = this.safeValue (this, 'fundingRates', {});
+            this.fundingRates[symbol] = fundingRate;
+            const fundingHash = 'fundingrate:' + symbol;
+            client.resolve (fundingRate, fundingHash);
+        }
     }
 
     handleMarkPriceArray (client: Client, message) {
         if (!Array.isArray (message)) {
             return;
         }
+        if (this.safeValue (this.options, 'watchFundingRatesDebug')) {
+            console.log (this.id, 'handleMarkPriceArray batch size', message.length, message);
+        }
         const result: Tickers = {};
+        const fundingResult: FundingRates = {};
+        this.fundingRates = this.safeValue (this, 'fundingRates', {});
         for (let i = 0; i < message.length; i++) {
             const entry = message[i];
             const marketId = this.safeString (entry, 's');
@@ -631,8 +697,18 @@ export default class asterdex extends asterdexRest {
             result[symbol] = parsed;
             const symbolHash = 'markprice:' + symbol;
             client.resolve (parsed, symbolHash);
+            const fundingRate = this.parseWsFundingRate (entry, market);
+            if (fundingRate !== undefined) {
+                this.fundingRates[symbol] = fundingRate;
+                fundingResult[symbol] = fundingRate;
+                const fundingHash = 'fundingrate:' + symbol;
+                client.resolve (fundingRate, fundingHash);
+            }
         }
         client.resolve (result, 'markprices');
+        if (Object.keys (fundingResult).length > 0) {
+            client.resolve (fundingResult, 'fundingrates');
+        }
     }
 
     getLiquidationsCache (symbol: Str = undefined) {
@@ -988,6 +1064,19 @@ export default class asterdex extends asterdexRest {
         }, market);
     }
 
+    parseWsFundingRate (ticker, market = undefined): FundingRate {
+        const marketId = this.safeString (ticker, 's');
+        const contract: Dict = {
+            'symbol': marketId,
+            'time': this.safeInteger (ticker, 'E'),
+            'markPrice': this.safeNumber (ticker, 'p'),
+            'indexPrice': this.safeNumber (ticker, 'i'),
+            'lastFundingRate': this.safeNumber (ticker, 'r'),
+            'nextFundingTime': this.safeInteger (ticker, 'T'),
+        };
+        return this.parseFundingRate (contract, market);
+    }
+
     parseWsOHLCV (message, market = undefined): OHLCV {
         const data = this.safeDict (message, 'k', message);
         return [
@@ -1067,6 +1156,9 @@ export default class asterdex extends asterdexRest {
     }
 
     handlePublicStream (client: Client, stream: Str, message: Dict) {
+        if (this.safeValue (this.options, 'watchFundingRatesDebug')) {
+            console.log (this.id, 'handlePublicStream', stream, 'type', typeof message, Array.isArray (message) ? 'array len ' + message.length : 'object');
+        }
         const lowerStream = stream.toLowerCase ();
         if (lowerStream[0] === '!') {
             if (lowerStream === '!markprice@arr') {

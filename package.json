@@ -28,7 +28,8 @@
   },
   "readme": "README.md",
   "scripts": {
-    "run:paradex:funding": "tsx examples/ts/bots/paradex-watch-funding-rate.ts",
+    "run:watch-funding-rate": "tsx examples/ts/bots/watch-funding-rate.ts",
+    "run:watch-funding-rate:single": "tsx examples/ts/bots/watch-single-exchange-funding.ts",
     "test:paradex": "node run-tests --ts paradex",
     "test:paradex:fn": "node run-tests --ws paradex 'watchFundingRate()' BTC/USD:USDC --ts",
     "test:asterdex": "node run-tests --ts asterdex",
