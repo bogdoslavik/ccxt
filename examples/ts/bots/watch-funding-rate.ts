@@ -91,10 +91,15 @@ async function main () {
                     .sort ((a, b) => {
                         const aValue = (a.normalizedRate !== undefined) ? a.normalizedRate : a.rate;
                         const bValue = (b.normalizedRate !== undefined) ? b.normalizedRate : b.rate;
-                        return (bValue ?? -Infinity) - (aValue ?? -Infinity);
+                        const aAbs = (aValue !== undefined && Number.isFinite (aValue)) ? Math.abs (aValue) : -Infinity;
+                        const bAbs = (bValue !== undefined && Number.isFinite (bValue)) ? Math.abs (bValue) : -Infinity;
+                        return bAbs - aAbs;
                     })
                     .slice (0, TOP_N);
-                const symbolWidth = rows.reduce ((acc, row) => Math.max (acc, row.symbol.length), entry.id.length);
+                const symbolWidth = rows.reduce ((acc, row) => {
+                    const displaySymbol = (row.symbol?.split ('/')[0]) ?? row.symbol;
+                    return Math.max (acc, displaySymbol.length);
+                }, entry.id.length);
                 const rateWidth = rows.reduce ((acc, row) => {
                     const percent = (row.normalizedRate !== undefined) ? row.normalizedRate * 100 : (row.rate !== undefined ? row.rate * 100 : undefined);
                     const formatted = (percent !== undefined && Number.isFinite (percent)) ? ((percent >= 0 ? '+' : '') + percent.toFixed (4) + '%') : 'n/a';
@@ -108,7 +113,10 @@ async function main () {
                 await delay (PRINT_INTERVAL_MS);
                 continue;
             }
-            const header = snapshot.map ((col) => col.entry.id.toUpperCase ().padEnd (col.columnWidth)).join (' | ');
+            const header = snapshot.map ((col) => {
+                const padWidth = Math.max (col.columnWidth - 1, 0);
+                return col.entry.id.toUpperCase ().padEnd (padWidth) + ' ';
+            }).join ('| ');
             console.log (`\nTop funding rates (${TARGET_INTERVAL_HOURS}h normalized) @ ` + new Date ().toISOString ());
             console.log (header);
             for (let i = 0; i < TOP_N; i++) {
@@ -120,7 +128,8 @@ async function main () {
                     const normalized = (row.normalizedRate !== undefined) ? row.normalizedRate : row.rate;
                     const percent = (normalized !== undefined) ? normalized * 100 : undefined;
                     const rateStr = (percent !== undefined && Number.isFinite (percent)) ? ((percent >= 0 ? '+' : '') + percent.toFixed (4) + '%') : 'n/a';
-                    return `${row.symbol.padEnd (col.symbolWidth)} ${rateStr.padEnd (col.columnWidth - col.symbolWidth)}`;
+                    const displaySymbol = (row.symbol?.split ('/')[0]) ?? row.symbol;
+                    return `${displaySymbol.padEnd (col.symbolWidth)} ${rateStr.padEnd (col.columnWidth - col.symbolWidth)}`;
                 });
                 console.log (cells.join (' | '));
             }
