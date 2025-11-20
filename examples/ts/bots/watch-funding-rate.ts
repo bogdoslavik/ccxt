@@ -22,6 +22,51 @@ type FundingRow = {
     nativeIntervalHours?: number;
 };
 
+type FundingBucketEntry = {
+    exchangeId: string;
+    symbol: string;
+    normalizedRate: number;
+};
+
+type ArbitrageOpportunity = {
+    baseSymbol: string;
+    minEntry: FundingBucketEntry;
+    maxEntry: FundingBucketEntry;
+    delta: number;
+};
+
+const extractBaseFromSymbol = (symbol?: string): string | undefined => {
+    if (typeof symbol !== 'string' || symbol.length === 0) {
+        return undefined;
+    }
+    const separators = [ '/', ':', '-' ];
+    for (const separator of separators) {
+        const idx = symbol.indexOf (separator);
+        if (idx !== -1) {
+            return symbol.slice (0, idx);
+        }
+    }
+    return symbol;
+};
+
+const getDisplaySymbol = (symbol?: string): string => extractBaseFromSymbol (symbol) ?? '';
+
+const getBaseSymbol = (symbol?: string): string | undefined => extractBaseFromSymbol (symbol);
+
+const getNormalizedRateValue = (row: FundingRow): number | undefined => {
+    const candidate = (row.normalizedRate !== undefined) ? row.normalizedRate : row.rate;
+    return (candidate !== undefined && Number.isFinite (candidate)) ? candidate : undefined;
+};
+
+const formatPercent = (value?: number): string => {
+    if (value === undefined || !Number.isFinite (value)) {
+        return 'n/a';
+    }
+    const percent = value * 100;
+    const prefix = (percent >= 0 ? '+' : '');
+    return `${prefix}${percent.toFixed (4)}%`;
+};
+
 const delay = (ms: number) => new Promise ((resolve) => setTimeout (resolve, ms));
 
 const normalizeFundingPayload = (payload): any[] => {
@@ -110,12 +155,11 @@ async function main () {
                     MIN_RATE_WIDTH
                 );
                 const symbolWidth = rows.reduce ((acc, row) => {
-                    const displaySymbol = (row.symbol?.split ('/')[0]) ?? row.symbol;
+                    const displaySymbol = getDisplaySymbol (row.symbol);
                     return Math.max (acc, displaySymbol.length);
                 }, initialSymbolWidth);
                 const rateWidth = rows.reduce ((acc, row) => {
-                    const percent = (row.normalizedRate !== undefined) ? row.normalizedRate * 100 : (row.rate !== undefined ? row.rate * 100 : undefined);
-                    const formatted = (percent !== undefined && Number.isFinite (percent)) ? ((percent >= 0 ? '+' : '') + percent.toFixed (4) + '%') : 'n/a';
+                    const formatted = formatPercent (getNormalizedRateValue (row));
                     return Math.max (acc, formatted.length);
                 }, initialRateWidth);
                 const columnWidth = symbolWidth + 1 + rateWidth;
@@ -142,13 +186,100 @@ async function main () {
                     if (row === undefined) {
                         return ''.padEnd (col.columnWidth);
                     }
-                    const normalized = (row.normalizedRate !== undefined) ? row.normalizedRate : row.rate;
-                    const percent = (normalized !== undefined) ? normalized * 100 : undefined;
-                    const rateStr = (percent !== undefined && Number.isFinite (percent)) ? ((percent >= 0 ? '+' : '') + percent.toFixed (4) + '%') : 'n/a';
-                    const displaySymbol = (row.symbol?.split ('/')[0]) ?? row.symbol;
+                    const normalized = getNormalizedRateValue (row);
+                    const rateStr = formatPercent (normalized);
+                    const displaySymbol = getDisplaySymbol (row.symbol);
                     return `${displaySymbol.padEnd (col.symbolWidth)} ${rateStr.padEnd (col.rateWidth)}`;
                 });
                 console.log (cells.join (' | '));
+            }
+            const arbitrageRows = (() => {
+                const grouped: Map<string, FundingBucketEntry[]> = new Map ();
+                for (const exchangeEntry of EXCHANGES) {
+                    const store = exchangeState.get (exchangeEntry.id);
+                    if (store === undefined) {
+                        continue;
+                    }
+                    store.forEach ((row) => {
+                        const normalized = getNormalizedRateValue (row);
+                        const baseSymbol = getBaseSymbol (row.symbol);
+                        if (normalized === undefined || baseSymbol === undefined) {
+                            return;
+                        }
+                        if (!grouped.has (baseSymbol)) {
+                            grouped.set (baseSymbol, []);
+                        }
+                        grouped.get (baseSymbol).push ({
+                            exchangeId: exchangeEntry.id,
+                            symbol: row.symbol,
+                            normalizedRate: normalized,
+                        });
+                    });
+                }
+                const opportunities: ArbitrageOpportunity[] = [];
+                grouped.forEach ((entries, baseSymbol) => {
+                    if (entries.length < 2) {
+                        return;
+                    }
+                    const sorted = entries.slice ().sort ((a, b) => a.normalizedRate - b.normalizedRate);
+                    const minEntry = sorted[0];
+                    const maxEntry = sorted[sorted.length - 1];
+                    const delta = maxEntry.normalizedRate - minEntry.normalizedRate;
+                    if (delta <= 0) {
+                        return;
+                    }
+                    opportunities.push ({ baseSymbol, minEntry, maxEntry, delta });
+                });
+                return opportunities.sort ((a, b) => b.delta - a.delta).slice (0, TOP_N);
+            }) ();
+            console.log ('\nTop funding spreads by base symbol (normalized to ' + TARGET_INTERVAL_HOURS + 'h):');
+            if (arbitrageRows.length === 0) {
+                console.log ('No cross-exchange spreads detected yet.');
+            } else {
+                const headers = {
+                    symbol: 'Symbol',
+                    lowExchange: 'Min Exch',
+                    lowRate: 'Min Funding',
+                    highExchange: 'Max Exch',
+                    highRate: 'Max Funding',
+                    delta: 'Delta',
+                };
+                const widths = {
+                    symbol: headers.symbol.length,
+                    lowExchange: headers.lowExchange.length,
+                    lowRate: headers.lowRate.length,
+                    highExchange: headers.highExchange.length,
+                    highRate: headers.highRate.length,
+                    delta: headers.delta.length,
+                };
+                arbitrageRows.forEach ((row) => {
+                    widths.symbol = Math.max (widths.symbol, row.baseSymbol.length);
+                    widths.lowExchange = Math.max (widths.lowExchange, row.minEntry.exchangeId.length);
+                    widths.lowRate = Math.max (widths.lowRate, formatPercent (row.minEntry.normalizedRate).length);
+                    widths.highExchange = Math.max (widths.highExchange, row.maxEntry.exchangeId.length);
+                    widths.highRate = Math.max (widths.highRate, formatPercent (row.maxEntry.normalizedRate).length);
+                    widths.delta = Math.max (widths.delta, formatPercent (row.delta).length);
+                });
+                const headerRow = [
+                    headers.symbol.padEnd (widths.symbol),
+                    headers.lowExchange.padEnd (widths.lowExchange),
+                    headers.lowRate.padEnd (widths.lowRate),
+                    headers.highExchange.padEnd (widths.highExchange),
+                    headers.highRate.padEnd (widths.highRate),
+                    headers.delta.padEnd (widths.delta),
+                ].join (' | ');
+                console.log (headerRow);
+                arbitrageRows.forEach ((row) => {
+                    const line = [
+                        row.baseSymbol.padEnd (widths.symbol),
+                        row.minEntry.exchangeId.padEnd (widths.lowExchange),
+                        formatPercent (row.minEntry.normalizedRate).padEnd (widths.lowRate),
+                        row.maxEntry.exchangeId.padEnd (widths.highExchange),
+                        formatPercent (row.maxEntry.normalizedRate).padEnd (widths.highRate),
+                        formatPercent (row.delta).padEnd (widths.delta),
+                    ].join (' | ');
+                    console.log (line);
+                });
             }
             await delay (PRINT_INTERVAL_MS);
         }
