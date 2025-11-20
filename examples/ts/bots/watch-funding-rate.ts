@@ -1,6 +1,7 @@
 import ccxt from '../../../ts/ccxt';
+import { MongoClient } from 'mongodb';
 
-const TOP_N = 10;
+const TOP_N = 20;
 const PRINT_INTERVAL_MS = 1000;
 const RETRY_DELAY_MS = 5000;
 const TARGET_INTERVAL_HOURS = 8;
@@ -14,6 +15,19 @@ const EXCHANGES = [
     { id: 'lighter', instance: new ccxt.pro.lighter ({ enableRateLimit: true }), filter: (_symbol: string) => true },
     { id: 'extended', instance: new ccxt.pro.extended ({ enableRateLimit: true }), filter: (_symbol: string) => true },
 ];
+
+type ExchangeFeeInfo = {
+    maker: number;
+    taker: number;
+};
+
+const EXCHANGE_FEES: Record<string, ExchangeFeeInfo> = {
+    paradex: { maker: 0, taker: 0 },
+    asterdex: { maker: 0.0001, taker: 0.00035 },
+    hyperliquid: { maker: 0.00015, taker: 0.00045 },
+    lighter: { maker: 0, taker: 0 },
+    extended: { maker: 0, taker: 0.00025 },
+};
 
 type FundingRow = {
     symbol: string;
@@ -33,6 +47,9 @@ type ArbitrageOpportunity = {
     minEntry: FundingBucketEntry;
     maxEntry: FundingBucketEntry;
     delta: number;
+    minFeeCost: number;
+    maxFeeCost: number;
+    deltaWithFees: number;
 };
 
 const extractBaseFromSymbol = (symbol?: string): string | undefined => {
@@ -67,6 +84,22 @@ const formatPercent = (value?: number): string => {
     return `${prefix}${percent.toFixed (4)}%`;
 };
 
+const formatUnsignedPercent = (value?: number): string => {
+    if (value === undefined || !Number.isFinite (value)) {
+        return 'n/a';
+    }
+    return `${Math.abs (value * 100).toFixed (4)}%`;
+};
+
+const getTakerFee = (exchangeId: string): number => EXCHANGE_FEES[exchangeId]?.taker ?? 0;
+
+const getDoubleTakerFee = (exchangeId: string): number => getTakerFee (exchangeId) * 2;
+
+const formatExchangeWithFees = (exchangeId: string, feeValue?: number): string => {
+    const doubleFee = (feeValue !== undefined) ? feeValue : getDoubleTakerFee (exchangeId);
+    return `${exchangeId} (${formatUnsignedPercent (doubleFee)})`;
+};
+
 const delay = (ms: number) => new Promise ((resolve) => setTimeout (resolve, ms));
 
 const normalizeFundingPayload = (payload): any[] => {
@@ -98,10 +131,16 @@ async function main () {
         exchangeState.set (entry.id, new Map ());
     }
     const columnSizing: Map<string, { symbolWidth: number; rateWidth: number }> = new Map ();
+    const mongoUri = process.env.MONGO_URI ?? 'mongodb://localhost:27017';
+    const mongoClient = new MongoClient (mongoUri);
+    await mongoClient.connect ();
+    console.log ('Connected to MongoDB @ ' + mongoUri);
+    const spreadsCollection = mongoClient.db ('funding').collection ('spread');
 
     const shutdown = async () => {
         console.log ('\nGracefully closing WebSockets...');
         await Promise.all (EXCHANGES.map ((entry) => entry.instance.close ()));
+        await mongoClient.close ();
         process.exit (0);
     };
     process.on ('SIGINT', shutdown);
@@ -128,6 +167,30 @@ async function main () {
                 console.error (`${exchangeEntry.id} watchFundingRates error:`, err);
                 await delay (RETRY_DELAY_MS);
             }
+        }
+    };
+
+    const persistArbitrageRows = async (rows: ArbitrageOpportunity[]) => {
+        if (rows.length === 0) {
+            return;
+        }
+        const timestamp = new Date ();
+        const documents = rows.map ((row) => ({
+            timestamp,
+            symbol: row.baseSymbol,
+            minEx: row.minEntry.exchangeId,
+            minExFees: row.minFeeCost,
+            minFunding: row.minEntry.normalizedRate,
+            maxEx: row.maxEntry.exchangeId,
+            maxExFees: row.maxFeeCost,
+            maxFunding: row.maxEntry.normalizedRate,
+            delta: row.delta,
+            deltaWFees: row.deltaWithFees,
+        }));
+        try {
+            await spreadsCollection.insertMany (documents, { ordered: false });
+        } catch (err) {
+            console.error ('Mongo insert error', err);
         }
     };
 
@@ -228,9 +291,20 @@ async function main () {
                     if (delta <= 0) {
                         return;
                     }
-                    opportunities.push ({ baseSymbol, minEntry, maxEntry, delta });
+                    const minFeeCost = getDoubleTakerFee (minEntry.exchangeId);
+                    const maxFeeCost = getDoubleTakerFee (maxEntry.exchangeId);
+                    const deltaWithFees = delta - (minFeeCost + maxFeeCost);
+                    opportunities.push ({ baseSymbol, minEntry, maxEntry, delta, minFeeCost, maxFeeCost, deltaWithFees });
                 });
-                return opportunities.sort ((a, b) => b.delta - a.delta).slice (0, TOP_N);
+                return opportunities
+                    .sort ((a, b) => {
+                        const feesDiff = b.deltaWithFees - a.deltaWithFees;
+                        if (feesDiff !== 0) {
+                            return feesDiff;
+                        }
+                        return b.delta - a.delta;
+                    })
+                    .slice (0, TOP_N);
             }) ();
             console.log ('\nTop funding spreads by base symbol (normalized to ' + TARGET_INTERVAL_HOURS + 'h):');
             if (arbitrageRows.length === 0) {
@@ -238,11 +312,12 @@ async function main () {
             } else {
                 const headers = {
                     symbol: 'Symbol',
-                    lowExchange: 'Min Exch',
+                    lowExchange: 'Min Exch (fee*2)',
                     lowRate: 'Min Funding',
-                    highExchange: 'Max Exch',
+                    highExchange: 'Max Exch (fee*2)',
                     highRate: 'Max Funding',
                     delta: 'Delta',
+                    deltaWithFees: 'Delta w/ Fees',
                 };
                 const widths = {
                     symbol: headers.symbol.length,
@@ -251,14 +326,18 @@ async function main () {
                     highExchange: headers.highExchange.length,
                     highRate: headers.highRate.length,
                     delta: headers.delta.length,
+                    deltaWithFees: headers.deltaWithFees.length,
                 };
                 arbitrageRows.forEach ((row) => {
                     widths.symbol = Math.max (widths.symbol, row.baseSymbol.length);
-                    widths.lowExchange = Math.max (widths.lowExchange, row.minEntry.exchangeId.length);
+                    const minExchangeLabel = formatExchangeWithFees (row.minEntry.exchangeId, row.minFeeCost);
+                    widths.lowExchange = Math.max (widths.lowExchange, minExchangeLabel.length);
                     widths.lowRate = Math.max (widths.lowRate, formatPercent (row.minEntry.normalizedRate).length);
-                    widths.highExchange = Math.max (widths.highExchange, row.maxEntry.exchangeId.length);
+                    const maxExchangeLabel = formatExchangeWithFees (row.maxEntry.exchangeId, row.maxFeeCost);
+                    widths.highExchange = Math.max (widths.highExchange, maxExchangeLabel.length);
                     widths.highRate = Math.max (widths.highRate, formatPercent (row.maxEntry.normalizedRate).length);
                     widths.delta = Math.max (widths.delta, formatPercent (row.delta).length);
+                    widths.deltaWithFees = Math.max (widths.deltaWithFees, formatPercent (row.deltaWithFees).length);
                 });
                 const headerRow = [
                     headers.symbol.padEnd (widths.symbol),
@@ -267,20 +346,25 @@ async function main () {
                     headers.highExchange.padEnd (widths.highExchange),
                     headers.highRate.padEnd (widths.highRate),
                     headers.delta.padEnd (widths.delta),
+                    headers.deltaWithFees.padEnd (widths.deltaWithFees),
                 ].join (' | ');
                 console.log (headerRow);
                 arbitrageRows.forEach ((row) => {
+                    const minExchangeLabel = formatExchangeWithFees (row.minEntry.exchangeId, row.minFeeCost);
+                    const maxExchangeLabel = formatExchangeWithFees (row.maxEntry.exchangeId, row.maxFeeCost);
                     const line = [
                         row.baseSymbol.padEnd (widths.symbol),
-                        row.minEntry.exchangeId.padEnd (widths.lowExchange),
+                        minExchangeLabel.padEnd (widths.lowExchange),
                         formatPercent (row.minEntry.normalizedRate).padEnd (widths.lowRate),
-                        row.maxEntry.exchangeId.padEnd (widths.highExchange),
+                        maxExchangeLabel.padEnd (widths.highExchange),
                         formatPercent (row.maxEntry.normalizedRate).padEnd (widths.highRate),
                         formatPercent (row.delta).padEnd (widths.delta),
+                        formatPercent (row.deltaWithFees).padEnd (widths.deltaWithFees),
                     ].join (' | ');
                     console.log (line);
                 });
             }
+            await persistArbitrageRows (arbitrageRows);
             await delay (PRINT_INTERVAL_MS);
         }
     };
