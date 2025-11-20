@@ -91,6 +91,13 @@ const formatUnsignedPercent = (value?: number): string => {
     return `${Math.abs (value * 100).toFixed (4)}%`;
 };
 
+const rateToPercentNumber = (value?: number): number | undefined => {
+    if (value === undefined || !Number.isFinite (value)) {
+        return undefined;
+    }
+    return value * 100;
+};
+
 const getTakerFee = (exchangeId: string): number => EXCHANGE_FEES[exchangeId]?.taker ?? 0;
 
 const getDoubleTakerFee = (exchangeId: string): number => getTakerFee (exchangeId) * 2;
@@ -179,13 +186,13 @@ async function main () {
             timestamp,
             symbol: row.baseSymbol,
             minEx: row.minEntry.exchangeId,
-            minExFees: row.minFeeCost,
-            minFunding: row.minEntry.normalizedRate,
+            minExFees: rateToPercentNumber (row.minFeeCost),
+            minFunding: rateToPercentNumber (row.minEntry.normalizedRate),
             maxEx: row.maxEntry.exchangeId,
-            maxExFees: row.maxFeeCost,
-            maxFunding: row.maxEntry.normalizedRate,
-            delta: row.delta,
-            deltaWFees: row.deltaWithFees,
+            maxExFees: rateToPercentNumber (row.maxFeeCost),
+            maxFunding: rateToPercentNumber (row.maxEntry.normalizedRate),
+            delta: rateToPercentNumber (row.delta),
+            deltaWFees: rateToPercentNumber (row.deltaWithFees),
         }));
         try {
             await spreadsCollection.insertMany (documents, { ordered: false });
