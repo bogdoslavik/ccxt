@@ -7,7 +7,6 @@ import type { Strings, FundingRate, FundingRates, Dict, Market } from '../base/t
 //  ---------------------------------------------------------------------------
 
 export default class lighter extends lighterRest {
-
     describe (): any {
         const parent = super.describe ();
         return this.deepExtend (parent, {
@@ -122,7 +121,10 @@ export default class lighter extends lighterRest {
         }
         const market: Market = this.safeMarket (marketId, undefined, undefined, 'swap');
         const symbol = market['symbol'];
-        const fundingRate = this.safeNumber (stats, 'funding_rate');
+        const rawFundingRate = this.safeNumber (stats, 'funding_rate');
+        const fundingRate = (rawFundingRate !== undefined) ? rawFundingRate / 100 : undefined;
+        const rawNextFundingRate = this.safeNumber (stats, 'current_funding_rate');
+        const nextFundingRate = (rawNextFundingRate !== undefined) ? rawNextFundingRate / 100 : undefined;
         const timestamp = this.safeInteger (stats, 'funding_timestamp');
         return {
             'info': stats,
@@ -136,7 +138,7 @@ export default class lighter extends lighterRest {
             'fundingRate': fundingRate,
             'fundingTimestamp': timestamp,
             'fundingDatetime': this.iso8601 (timestamp),
-            'nextFundingRate': this.safeNumber (stats, 'current_funding_rate'),
+            'nextFundingRate': nextFundingRate,
             'nextFundingTimestamp': undefined,
             'nextFundingDatetime': undefined,
             'previousFundingRate': undefined,

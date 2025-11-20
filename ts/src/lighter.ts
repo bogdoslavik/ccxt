@@ -1,12 +1,11 @@
 //  ---------------------------------------------------------------------------
 
 import Exchange from './abstract/lighter.js';
-import type { Market, Dict, Str, Strings, FundingRate, FundingRates } from './base/types.js';
+import type { Market, Dict, Strings, FundingRate, FundingRates } from './base/types.js';
 
 //  ---------------------------------------------------------------------------
 
 export default class lighter extends Exchange {
-
     describe (): any {
         return this.deepExtend (super.describe (), {
             'id': 'lighter',
@@ -128,7 +127,8 @@ export default class lighter extends Exchange {
         const marketId = this.safeString (info, 'market_id');
         market = this.safeMarket (marketId, market);
         const symbol = market['symbol'];
-        const rate = this.safeNumber (info, 'rate');
+        const rawRate = this.safeNumber (info, 'rate');
+        const rate = (rawRate !== undefined) ? rawRate / 100 : undefined;
         return {
             'info': info,
             'symbol': symbol,
