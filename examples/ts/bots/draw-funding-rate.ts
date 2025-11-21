@@ -16,6 +16,10 @@ const TEXT_COLOR = '#111111';
 const LEGEND_TEXT_SIZE = 32;
 const AXIS_TEXT_SIZE = 28;
 const OUTPUT_PATH = process.env.FUNDING_SPREAD_OUTPUT ?? 'funding-spread.png';
+const LOAD_PROGRESS_STEPS = 20;
+const POINT_RADIUS = 2;
+const MAX_LINE_GAP_MS = 2000;
+const MIN_SYMBOL_DELTA_PERCENT = 0.2;
 
 type SpreadDocument = {
     timestamp: Date;
@@ -51,20 +55,25 @@ const buildPalette = (symbols: string[]): Map<string, string> => {
 };
 
 const drawLegend = (ctx, palette: Map<string, string>) => {
-    const legendX = 40;
     const legendY = 30;
     const lineHeight = LEGEND_TEXT_SIZE + 8;
     const columnWidth = 360;
-    let currentX = legendX;
+    const legendBottomLimit = (HEIGHT / 2) - 40;
+    const legendHeight = Math.max (1, legendBottomLimit - legendY);
+    const maxItemsPerColumn = Math.max (1, Math.floor (legendHeight / lineHeight));
+    const entries = Array.from (palette.entries ());
+    const columnsNeeded = Math.max (1, Math.ceil (entries.length / maxItemsPerColumn));
+    const totalLegendWidth = columnsNeeded * columnWidth;
+    const baseX = Math.max (20, (PADDING.left - totalLegendWidth - 20)) + columnWidth;
+    let currentX = baseX;
     let currentY = legendY;
     ctx.font = `${LEGEND_TEXT_SIZE}px Inter, Arial, sans-serif`;
     ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
     ctx.fillStyle = TEXT_COLOR;
     let itemsInColumn = 0;
-    const legendHeight = Math.max (1, (HEIGHT / 2) - legendY - 40);
-    const maxItemsPerColumn = Math.max (1, Math.floor (legendHeight / lineHeight));
-    palette.forEach ((color, symbol) => {
-        if (itemsInColumn >= maxItemsPerColumn) {
+    entries.forEach (([symbol, color]) => {
+        if (itemsInColumn >= maxItemsPerColumn || (currentY + LEGEND_TEXT_SIZE > legendBottomLimit)) {
             itemsInColumn = 0;
             currentX += columnWidth;
             currentY = legendY;
@@ -72,7 +81,6 @@ const drawLegend = (ctx, palette: Map<string, string>) => {
         ctx.fillStyle = color;
         ctx.fillRect (currentX, currentY, LEGEND_TEXT_SIZE, LEGEND_TEXT_SIZE);
         ctx.fillStyle = TEXT_COLOR;
-        ctx.textAlign = 'left';
         ctx.fillText (symbol, currentX + LEGEND_TEXT_SIZE + 12, currentY);
         currentY += lineHeight;
         itemsInColumn += 1;
@@ -85,12 +93,34 @@ async function main (): Promise<void> {
     await mongoClient.connect ();
     try {
         const collection = mongoClient.db ('funding').collection<SpreadDocument> ('spread');
-        const documents = await collection.find ({ deltaWFees: { $ne: null } }).sort ({ timestamp: 1 }).toArray ();
+        const filter = { deltaWFees: { $ne: null } };
+        const totalDocs = await collection.countDocuments (filter);
+        const cursor = collection.find (filter).sort ({ timestamp: 1 });
+        const documents: SpreadDocument[] = [];
+        let processed = 0;
+        let lastLoggedStep = -1;
+        for await (const doc of cursor) {
+            documents.push (doc);
+            processed += 1;
+            if (totalDocs > 0) {
+                const currentStep = Math.min (LOAD_PROGRESS_STEPS, Math.floor ((processed / totalDocs) * LOAD_PROGRESS_STEPS));
+                if (currentStep > lastLoggedStep) {
+                    const percent = ((processed / totalDocs) * 100).toFixed (1);
+                    console.log (`Loading spread rows... ${processed}/${totalDocs} (${percent}%)`);
+                    lastLoggedStep = currentStep;
+                }
+            } else if (processed % 1000 === 0) {
+                console.log (`Loading spread rows... ${processed} processed`);
+            }
+        }
+        if (totalDocs > 0 && processed < totalDocs) {
+            console.log (`Loading spread rows... ${processed}/${totalDocs} (100.0%)`);
+        }
         if (documents.length === 0) {
             console.log ('No spread documents found.');
             return;
         }
-        const rows = documents
+        let rows = documents
             .map ((doc) => ({
                 symbol: doc.symbol ?? 'UNKNOWN',
                 timestamp: normalizeTimestamp (doc.timestamp),
@@ -99,6 +129,22 @@ async function main (): Promise<void> {
             .filter ((row) => Number.isFinite (row.timestamp));
         if (rows.length === 0) {
             console.log ('No valid rows with timestamps.');
+            return;
+        }
+
+        const symbolMax = new Map<string, number> ();
+        rows.forEach ((row) => {
+            const currentMax = symbolMax.get (row.symbol) ?? -Infinity;
+            symbolMax.set (row.symbol, Math.max (currentMax, row.deltaWFees));
+        });
+        const allowedSymbols = new Set (
+            Array.from (symbolMax.entries ())
+                .filter (([, maxValue]) => maxValue > MIN_SYMBOL_DELTA_PERCENT)
+                .map (([symbol]) => symbol)
+        );
+        rows = rows.filter ((row) => allowedSymbols.has (row.symbol));
+        if (rows.length === 0) {
+            console.log (`No symbols exceeded ${MIN_SYMBOL_DELTA_PERCENT.toFixed (1)}% delta.`);
             return;
         }
 
@@ -144,6 +190,8 @@ async function main (): Promise<void> {
             ctx.textAlign = 'right';
             ctx.textBaseline = 'middle';
             ctx.fillText (`${val.toFixed (1)}%`, chartLeft - 20, y);
+            ctx.textAlign = 'left';
+            ctx.fillText (`${val.toFixed (1)}%`, chartRight + 20, y);
         }
 
         // Vertical hourly grid
@@ -177,7 +225,7 @@ async function main (): Promise<void> {
         // Prepare series data
         const symbolSet = Array.from (new Set (rows.map ((row) => row.symbol))).sort ();
         const palette = buildPalette (symbolSet);
-        const seriesMap = new Map<string, { color: string; points: { x: number; y: number }[] }>();
+        const seriesMap = new Map<string, { color: string; points: { x: number; y: number; timestamp: number; value: number }[] }>();
         rows.forEach ((row) => {
             const color = palette.get (row.symbol) ?? '#000000';
             if (!seriesMap.has (row.symbol)) {
@@ -186,30 +234,43 @@ async function main (): Promise<void> {
             seriesMap.get (row.symbol).points.push ({
                 x: timeToX (row.timestamp),
                 y: valueToY (row.deltaWFees),
+                value: row.deltaWFees,
+                timestamp: row.timestamp,
             });
         });
 
         // Draw series lines
-        seriesMap.forEach ((series) => {
-            const pts = series.points.sort ((a, b) => a.x - b.x);
+        const paletteEntries = Array.from (palette.entries ());
+        seriesMap.forEach ((series, symbol) => {
+            const pts = series.points.sort ((a, b) => a.timestamp - b.timestamp);
             if (pts.length === 0) {
                 return;
             }
             ctx.strokeStyle = series.color;
-            ctx.lineWidth = 3;
-            ctx.beginPath ();
-            ctx.moveTo (pts[0].x, pts[0].y);
+            ctx.lineWidth = 1;
             for (let i = 1; i < pts.length; i++) {
-                ctx.lineTo (pts[i].x, pts[i].y);
+                const prev = pts[i - 1];
+                const current = pts[i];
+                if ((current.timestamp - prev.timestamp) <= MAX_LINE_GAP_MS) {
+                    ctx.beginPath (); 
+                    ctx.moveTo (prev.x, prev.y);
+                    ctx.lineTo (current.x, current.y);
+                    ctx.stroke ();
+                }
             }
-            ctx.stroke ();
-            // draw points
             pts.forEach ((pt) => {
                 ctx.fillStyle = series.color;
                 ctx.beginPath ();
-                ctx.arc (pt.x, pt.y, 4, 0, Math.PI * 2);
+                ctx.arc (pt.x, pt.y, POINT_RADIUS, 0, Math.PI * 2);
                 ctx.fill ();
             });
+
+            const highest = pts.reduce ((maxPoint, point) => (point.value > maxPoint.value ? point : maxPoint), pts[0]);
+            ctx.fillStyle = series.color;
+            ctx.font = `${AXIS_TEXT_SIZE}px Inter, Arial, sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText (symbol, highest.x, highest.y - 8);
         });
 
         drawLegend (ctx, palette);
