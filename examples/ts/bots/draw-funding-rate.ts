@@ -19,7 +19,7 @@ const OUTPUT_PATH = process.env.FUNDING_SPREAD_OUTPUT ?? 'funding-spread.png';
 const LOAD_PROGRESS_STEPS = 20;
 const POINT_RADIUS = 2;
 const MAX_LINE_GAP_MS = 2000;
-const MIN_SYMBOL_DELTA_PERCENT = 0.2;
+const MIN_SYMBOL_DELTA_PERCENT = 0.5;
 
 type SpreadDocument = {
     timestamp: Date;
@@ -46,9 +46,10 @@ const toPercentNumber = (value: unknown): number | undefined => {
 
 const buildPalette = (symbols: string[]): Map<string, string> => {
     const palette = new Map<string, string> ();
+    const count = Math.max (1, symbols.length);
     symbols.forEach ((symbol, index) => {
-        const hue = (index * 137.508) % 360; // golden-angle to spread hues
-        const color = `hsl(${hue}, 70%, 50%)`;
+        const hue = (index / count) * 360;
+        const color = `hsl(${hue.toFixed (2)}, 70%, 50%)`;
         palette.set (symbol, color);
     });
     return palette;
@@ -252,7 +253,7 @@ async function main (): Promise<void> {
                 const prev = pts[i - 1];
                 const current = pts[i];
                 if ((current.timestamp - prev.timestamp) <= MAX_LINE_GAP_MS) {
-                    ctx.beginPath (); 
+                    ctx.beginPath ();
                     ctx.moveTo (prev.x, prev.y);
                     ctx.lineTo (current.x, current.y);
                     ctx.stroke ();
