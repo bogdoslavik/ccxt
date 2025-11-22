@@ -4,6 +4,7 @@ import hyperliquidRest from '../hyperliquid.js';
 import Client from '../base/ws/Client.js';
 import { Int, Str, Market, OrderBook, Trade, OHLCV, Order, Dict, Strings, Ticker, Tickers, type Num, OrderType, OrderSide, type OrderRequest, Bool, FundingRate, FundingRates } from '../base/types.js';
 import { ArrayCache, ArrayCacheByTimestamp, ArrayCacheBySymbolById } from '../base/ws/Cache.js';
+import Precise from '../base/Precise.js';
 
 //  ---------------------------------------------------------------------------
 
@@ -29,6 +30,8 @@ export default class hyperliquid extends hyperliquidRest {
                 'watchTrades': true,
                 'watchTradesForSymbols': false,
                 'watchPosition': false,
+                'watchBidAsk': true,
+                'watchBidsAsks': true,
             },
             'urls': {
                 'api': {
@@ -353,6 +356,32 @@ export default class hyperliquid extends hyperliquidRest {
         return this.tickers;
     }
 
+    async watchBidAsk (symbol: string, params = {}): Promise<Ticker> {
+        const market = this.market (symbol);
+        const bidsasks = await this.watchBidsAsks ([ market['symbol'] ], params);
+        return this.safeValue (bidsasks, market['symbol']);
+    }
+
+    async watchBidsAsks (symbols: Strings = undefined, params = {}): Promise<Tickers> {
+        await this.loadMarkets ();
+        symbols = this.marketSymbols (symbols, undefined, true);
+        const messageHash = 'bidsasks';
+        const url = this.urls['api']['ws']['public'];
+        const request: Dict = {
+            'method': 'subscribe',
+            'subscription': {
+                'type': 'webData2',
+                'user': '0x0000000000000000000000000000000000000000',
+            },
+        };
+        const bidasks = await this.watch (url, messageHash, this.extend (request, params), messageHash);
+        if (this.newUpdates) {
+            return this.filterByArrayTickers (bidasks, 'symbol', symbols);
+        }
+        this.bidsasks = this.safeValue (this, 'bidsasks', {});
+        return this.filterByArray (this.bidsasks, 'symbol', symbols);
+    }
+
     async watchFundingRate (symbol: string, params = {}): Promise<FundingRate> {
         const rates = await this.watchFundingRates ([ symbol ], params);
         return this.safeValue (rates, symbol);
@@ -507,6 +536,7 @@ export default class hyperliquid extends hyperliquidRest {
         const parsedTickers = [];
         const fundingResult: FundingRates = {};
         this.fundingRates = this.safeValue (this, 'fundingRates', {});
+        this.bidsasks = this.safeValue (this, 'bidsasks', {});
         for (let i = 0; i < spotAssets.length; i++) {
             const assetObject = spotAssets[i];
             const marketId = this.safeString (assetObject, 'coin');
@@ -515,6 +545,10 @@ export default class hyperliquid extends hyperliquidRest {
             const ticker = this.parseWsTicker (assetObject, market);
             parsedTickers.push (ticker);
             this.tickers[symbol] = ticker;
+            const bidask = this.parseWsBidAsk (assetObject, market);
+            if (bidask !== undefined) {
+                this.bidsasks[symbol] = bidask;
+            }
         }
         // perpetuals
         const meta = this.safeDict (rawData, 'meta', {});
@@ -531,12 +565,24 @@ export default class hyperliquid extends hyperliquidRest {
             const ticker = this.parseWsTicker (data, market);
             this.tickers[symbol] = ticker;
             parsedTickers.push (ticker);
+            const bidask = this.parseWsBidAsk (data, market);
+            if (bidask !== undefined) {
+                this.bidsasks[symbol] = bidask;
+            }
             const fundingRate = this.parseFundingRate (data, market);
             this.fundingRates[symbol] = fundingRate;
             fundingResult[symbol] = fundingRate;
         }
         const tickers = this.indexBy (parsedTickers, 'symbol');
         client.resolve (tickers, 'tickers');
+        if (Object.keys (this.bidsasks).length > 0) {
+            client.resolve (this.bidsasks, 'bidsasks');
+            const bidaskSymbols = Object.keys (this.bidsasks);
+            for (let i = 0; i < bidaskSymbols.length; i++) {
+                const symbol = bidaskSymbols[i];
+                client.resolve (this.bidsasks[symbol], 'bidask:' + symbol);
+            }
+        }
         const fundingSymbols = Object.keys (fundingResult);
         if (fundingSymbols.length > 0) {
             client.resolve (fundingResult, 'fundingrates');
@@ -549,6 +595,41 @@ export default class hyperliquid extends hyperliquidRest {
 
     parseWsTicker (rawTicker, market: Market = undefined): Ticker {
         return this.parseTicker (rawTicker, market);
+    }
+
+    parseWsBidAsk (rawTicker, market: Market = undefined): Ticker {
+        const marketId = (market !== undefined) ? market['id'] : this.safeString2 (rawTicker, 'coin', 'name');
+        const symbol = this.safeSymbol (marketId, market, undefined, market !== undefined ? market['type'] : undefined);
+        const timestamp = this.safeInteger2 (rawTicker, 'time', 'timestamp');
+        const impactPrices = this.safeList (rawTicker, 'impactPxs');
+        let bid = this.safeString (impactPrices, 0);
+        let ask = this.safeString (impactPrices, 1);
+        if ((bid === undefined) && (ask === undefined)) {
+            const mid = this.safeNumber (rawTicker, 'midPx');
+            const spread = this.safeNumber (rawTicker, 'spread');
+            if (mid !== undefined) {
+                const spreadHalf = (spread !== undefined) ? spread / 2 : 0;
+                bid = this.numberToString (mid - spreadHalf);
+                ask = this.numberToString (mid + spreadHalf);
+            }
+        }
+        if ((symbol === undefined) || (bid === undefined) || (ask === undefined)) {
+            return undefined as any;
+        }
+        if (Precise.stringLe (ask, bid)) {
+            // spot feed may provide only midPx; enforce a minimal positive spread
+            ask = Precise.stringAdd (bid, '0.00000001');
+        }
+        return this.safeTicker ({
+            'symbol': symbol,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'bid': bid,
+            'ask': ask,
+            'bidVolume': undefined,
+            'askVolume': undefined,
+            'info': rawTicker,
+        }, market);
     }
 
     handleMyTrades (client: Client, message) {

@@ -3,6 +3,7 @@
 
 import paradexRest from '../paradex.js';
 import { ArrayCache } from '../base/ws/Cache.js';
+import Precise from '../base/Precise.js';
 import type { Int, Trade, Dict, OrderBook, Ticker, Strings, Tickers, Bool, FundingRate, FundingRates } from '../base/types.js';
 import Client from '../base/ws/Client.js';
 
@@ -23,6 +24,8 @@ export default class paradex extends paradexRest {
                 'watchTradesForSymbols': false,
                 'watchBalance': false,
                 'watchOHLCV': false,
+                'watchBidAsk': true,
+                'watchBidsAsks': true,
             },
             'urls': {
                 'logo': 'https://x.com/tradeparadex/photo',
@@ -264,6 +267,43 @@ export default class paradex extends paradexRest {
         return this.filterByArray (this.tickers, 'symbol', symbols);
     }
 
+    async watchBidAsk (symbol: string, params = {}): Promise<Ticker> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const bidasks = await this.watchBidsAsks ([ market['symbol'] ], params);
+        return this.safeValue (bidasks, market['symbol']);
+    }
+
+    async watchBidsAsks (symbols: Strings = undefined, params = {}): Promise<Tickers> {
+        await this.loadMarkets ();
+        symbols = this.marketSymbols (symbols);
+        const channel = 'markets_summary';
+        const url = this.urls['api']['ws'];
+        const request: Dict = {
+            'jsonrpc': '2.0',
+            'method': 'subscribe',
+            'params': {
+                'channel': channel,
+            },
+        };
+        const messageHashes = [];
+        if ((symbols === undefined) || (symbols.length === 0)) {
+            messageHashes.push ('bidsasks');
+        } else {
+            for (let i = 0; i < symbols.length; i++) {
+                messageHashes.push ('bidask:' + symbols[i]);
+            }
+        }
+        const response = await this.watchMultiple (url, messageHashes, this.deepExtend (request, params), messageHashes);
+        if (this.newUpdates) {
+            const result: Dict = {};
+            result[response['symbol']] = response;
+            return result;
+        }
+        this.bidsasks = this.safeValue (this, 'bidsasks', {});
+        return this.filterByArray (this.bidsasks, 'symbol', symbols);
+    }
+
     /**
      * @method
      * @name paradex#watchFundingRate
@@ -357,6 +397,13 @@ export default class paradex extends paradexRest {
         this.tickers[symbol] = ticker;
         client.resolve (ticker, channel);
         client.resolve (ticker, messageHash);
+        const bidask = this.parseWsBidAsk (data, market);
+        if (bidask !== undefined) {
+            this.bidsasks = this.safeValue (this, 'bidsasks', {});
+            this.bidsasks[symbol] = bidask;
+            client.resolve (bidask, 'bidsasks');
+            client.resolve (bidask, 'bidask:' + symbol);
+        }
         const fundingRate = this.parseFundingRate (data, market);
         if (this.fundingRates === undefined) {
             this.fundingRates = {};
@@ -365,6 +412,31 @@ export default class paradex extends paradexRest {
         client.resolve (fundingRate, 'fundingrates');
         client.resolve (fundingRate, 'fundingrate:' + symbol);
         return message;
+    }
+
+    parseWsBidAsk (ticker, market = undefined): Ticker {
+        const marketId = this.safeString (ticker, 'symbol');
+        const symbol = this.safeSymbol (marketId, market);
+        const timestamp = this.safeInteger (ticker, 'created_at');
+        let bid = this.safeString (ticker, 'bid');
+        let ask = this.safeString (ticker, 'ask');
+        if ((bid === undefined) || (ask === undefined) || (bid === '') || (ask === '')) {
+            return undefined as any;
+        }
+        // exchange occasionally returns crossed or equal quotes; accept only strictly ask > bid
+        if (Precise.stringLe (ask, bid)) {
+            return undefined as any;
+        }
+        return this.safeTicker ({
+            'symbol': symbol,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'bid': bid,
+            'bidVolume': this.safeString (ticker, 'bid_size'),
+            'ask': ask,
+            'askVolume': this.safeString (ticker, 'ask_size'),
+            'info': ticker,
+        }, market);
     }
 
     handleErrorMessage (client: Client, message): Bool {

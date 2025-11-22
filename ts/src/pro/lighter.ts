@@ -2,6 +2,7 @@
 
 import lighterRest from '../lighter.js';
 import Client from '../base/ws/Client.js';
+import Precise from '../base/Precise.js';
 import type { Strings, FundingRate, FundingRates, Dict, Market } from '../base/types.js';
 
 //  ---------------------------------------------------------------------------
@@ -14,6 +15,8 @@ export default class lighter extends lighterRest {
                 'ws': true,
                 'watchFundingRate': true,
                 'watchFundingRates': true,
+                'watchBidAsk': true,
+                'watchBidsAsks': true,
             }),
             'urls': this.deepExtend (parent['urls'], {
                 'api': this.deepExtend (parent['urls']['api'], {
@@ -69,6 +72,46 @@ export default class lighter extends lighterRest {
         return result;
     }
 
+    async watchBidAsk (symbol: string, params = {}) {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const bidsasks = await this.watchBidsAsks ([ market['symbol'] ], params);
+        return this.safeValue (bidsasks, market['symbol']);
+    }
+
+    async watchBidsAsks (symbols: Strings = undefined, params = {}) {
+        await this.loadMarkets ();
+        const url = this.urls['api']['ws']['public'];
+        if (symbols === undefined || symbols.length === 0) {
+            const messageHash = 'bidsasks';
+            const request: Dict = {
+                'type': 'subscribe',
+                'channel': 'market_stats/all',
+            };
+            return await this.watch (url, messageHash, this.extend (request, params), messageHash);
+        }
+        const markets = symbols.map ((symbol) => this.market (symbol));
+        const promises = [];
+        for (let i = 0; i < markets.length; i++) {
+            const market = markets[i];
+            const messageHash = 'bidask:' + market['symbol'];
+            const channel = 'market_stats/' + market['id'];
+            const request: Dict = {
+                'type': 'subscribe',
+                'channel': channel,
+            };
+            promises.push (this.watch (url, messageHash, this.extend (request, params), messageHash));
+        }
+        const responses = await Promise.all (promises);
+        const result = {};
+        for (let i = 0; i < responses.length; i++) {
+            const bidask = responses[i];
+            const symbol = this.safeString (bidask, 'symbol', symbols[i]);
+            result[symbol] = bidask;
+        }
+        return result;
+    }
+
     handleMarketStats (client: Client, message) {
         const rawStats = this.safeValue (message, 'market_stats');
         if (rawStats === undefined) {
@@ -92,10 +135,18 @@ export default class lighter extends lighterRest {
             }
         }
         const fundingResult: FundingRates = {};
+        const bidsasks: Dict = {};
         for (let i = 0; i < entries.length; i++) {
             const entry = entries[i];
             const fundingRate = this.parseMarketStatsFunding (entry);
             if (fundingRate === undefined) {
+                const bidask = this.parseMarketStatsBidAsk (entry);
+                if (bidask !== undefined) {
+                    const symbol = bidask['symbol'];
+                    this.bidsasks = this.safeValue (this, 'bidsasks', {});
+                    this.bidsasks[symbol] = bidask;
+                    bidsasks[symbol] = bidask;
+                }
                 continue;
             }
             const symbol = fundingRate['symbol'];
@@ -107,10 +158,21 @@ export default class lighter extends lighterRest {
             fundingResult[symbol] = fundingRate;
             const messageHash = 'fundingrate:' + symbol;
             client.resolve (fundingRate, messageHash);
+            const bidask = this.parseMarketStatsBidAsk (entry);
+            if (bidask !== undefined) {
+                this.bidsasks = this.safeValue (this, 'bidsasks', {});
+                this.bidsasks[symbol] = bidask;
+                bidsasks[symbol] = bidask;
+                client.resolve (bidask, 'bidask:' + symbol);
+            }
         }
         const resultKeys = Object.keys (fundingResult);
         if (resultKeys.length > 0) {
             client.resolve (fundingResult, 'fundingrates');
+        }
+        const bidaskKeys = Object.keys (bidsasks);
+        if (bidaskKeys.length > 0) {
+            client.resolve (bidsasks, 'bidsasks');
         }
     }
 
@@ -145,6 +207,37 @@ export default class lighter extends lighterRest {
             'previousFundingTimestamp': undefined,
             'previousFundingDatetime': undefined,
         };
+    }
+
+    parseMarketStatsBidAsk (stats: Dict) {
+        const marketId = this.safeString (stats, 'market_id');
+        if (marketId === undefined) {
+            return undefined;
+        }
+        const market: Market = this.safeMarket (marketId, undefined, undefined, 'swap');
+        const symbol = market['symbol'];
+        const timestamp = this.safeInteger (stats, 'timestamp');
+        let bid = this.safeString2 (stats, 'best_bid_price', 'best_bid');
+        let ask = this.safeString2 (stats, 'best_ask_price', 'best_ask');
+        if (bid === undefined && ask === undefined) {
+            const mark = this.safeString (stats, 'mark_price');
+            const last = this.safeString (stats, 'last_trade_price', mark);
+            bid = last;
+            // ensure ask > bid to satisfy ticker assertions
+            if (bid !== undefined) {
+                ask = Precise.stringAdd (bid, '0.00000001');
+            }
+        }
+        return this.safeTicker ({
+            'symbol': symbol,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'bid': bid,
+            'bidVolume': this.safeString2 (stats, 'best_bid_size', 'best_bid_quantity'),
+            'ask': ask,
+            'askVolume': this.safeString2 (stats, 'best_ask_size', 'best_ask_quantity'),
+            'info': stats,
+        }, market);
     }
 
     async pong (client: Client, message) {

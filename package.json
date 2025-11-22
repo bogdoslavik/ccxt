@@ -28,6 +28,8 @@
   },
   "readme": "README.md",
   "scripts": {
+    "run:watch-bidsasks": "tsx examples/ts/bots/watch-bidsasks.ts",
+    "run:watch-bidsasks:one": "tsx examples/ts/bots/watch-bidsasks-one.ts",
     "run:draw-funding-rate": "tsx examples/ts/bots/draw-funding-rate.ts",
     "run:watch-funding-rate": "tsx examples/ts/bots/watch-funding-rate.ts",
     "run:watch-funding-rate:single": "tsx examples/ts/bots/watch-single-exchange-funding.ts",
