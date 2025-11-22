@@ -240,8 +240,8 @@ async function main () {
                 const deltaPct = (row.delta * 100).toFixed (4) + '%';
                 const deltaFeePct = (row.deltaWFees * 100).toFixed (4) + '%';
                 const base = getBaseSymbol (row.symbol);
-                const longStr = formatSide (row.minEx, row.minAsk, longFee);
-                const shortStr = formatSide (row.maxEx, row.maxBid, shortFee);
+                const longStr = formatSide (row.minEx, row.minAsk/*, longFee*/);
+                const shortStr = formatSide (row.maxEx, row.maxBid/*, shortFee*/);
                 console.log (
                     pad (base, symW) + ' | ' +
                     pad (longStr, exchW) + ' | ' +
