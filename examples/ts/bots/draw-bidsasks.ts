@@ -3,7 +3,7 @@ import path from 'node:path';
 import { MongoClient } from 'mongodb';
 import { createCanvas } from 'canvas';
 
-const WIDTH = 5120;
+const WIDTH = 5120*4;
 const HEIGHT = 1440;
 const PADDING = { top: 80, right: 160, bottom: 180, left: 220 };
 const HOUR_MS = 60 * 60 * 1000;
