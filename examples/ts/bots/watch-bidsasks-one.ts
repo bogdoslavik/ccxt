@@ -4,8 +4,9 @@ import ccxt from '../../../ts/ccxt';
 // Defaults: exchangeId=paradex, symbol=all (aggregate stream if supported)
 
 const main = async () => {
-    const exchangeId = process.argv[2] ?? 'lighter'; // paradex asterdex lighter extended
-    const symbol = process.argv[3] ?? 'ETH/USDC:USDC';
+    const exchangeId = process.argv[2] ?? 'asterdex'; // paradex asterdex lighter extended
+    // const symbol = process.argv[3] ?? 'ETH/USDC:USDC';
+    const symbol = process.argv[3] ?? 'ETH/USDT:USDT';
     if (!(exchangeId in ccxt.pro)) {
         console.error ('Unknown exchange id:', exchangeId);
         process.exit (1);

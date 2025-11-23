@@ -66,6 +66,20 @@ export default class asterdex extends asterdexRest {
         return this.urls['api']['ws']['future'] + '/' + stream;
     }
 
+    getCombinedStreamUrl (streams: Str[]) {
+        const combinedBase = this.urls['api']['ws']['combined'];
+        return combinedBase + streams.join ('/');
+    }
+
+    normalizeOrderBookLimit (limit: Int) {
+        if (limit <= 5) {
+            return [ 'depth5', 5 ];
+        } else if (limit <= 10) {
+            return [ 'depth10', 10 ];
+        }
+        return [ 'depth20', 20 ];
+    }
+
     getKlineMessageHash (scope: Str, symbol: Str, timeframe: Str) {
         return 'ohlcv:' + scope + ':' + symbol + ':' + timeframe;
     }
@@ -153,19 +167,14 @@ export default class asterdex extends asterdexRest {
     async watchOrderBook (symbol: string, limit: Int = undefined, params = {}): Promise<OrderBook> {
         await this.loadMarkets ();
         const market = this.market (symbol);
-        limit = (limit === undefined) ? this.safeInteger (this.options, 'watchOrderBookLimit', 1000) : limit;
-        let depth = 'depth20';
-        if (limit <= 5) {
-            depth = 'depth5';
-        } else if (limit <= 10) {
-            depth = 'depth10';
-        }
+        limit = (limit === undefined) ? this.safeInteger (this.options, 'watchOrderBookLimit', 20) : limit;
+        const [ depth, streamLimit ] = this.normalizeOrderBookLimit (limit);
         const stream = this.formatPerpStream (market['id'], depth + '@100ms');
         const url = this.getStreamUrl (stream);
         const messageHash = 'orderbook:' + market['symbol'];
-        this.prepareOrderBook (market['symbol'], limit, params);
+        this.prepareOrderBook (market['symbol'], streamLimit, params);
         const client = this.client (url);
-        this.spawn (this.fetchOrderBookSnapshot, client, { 'symbol': market['symbol'], 'limit': limit, 'params': params });
+        this.spawn (this.fetchOrderBookSnapshot, client, { 'symbol': market['symbol'], 'limit': streamLimit, 'params': params });
         return await this.watch (url, messageHash, undefined, params);
     }
 
@@ -175,32 +184,23 @@ export default class asterdex extends asterdexRest {
         if ((symbols === undefined) || (symbols.length === 0)) {
             throw new ArgumentsRequired (this.id + ' watchOrderBookForSymbols() requires a non-empty array of symbols');
         }
-        const markets = symbols.map ((symbol) => this.market (symbol));
-        const streamHashes = [];
-        const urls = [];
-        for (let i = 0; i < markets.length; i++) {
-            const market = markets[i];
-            limit = (limit === undefined) ? this.safeInteger (this.options, 'watchOrderBookLimit', 1000) : limit;
-            let depth = 'depth20';
-            if (limit <= 5) {
-                depth = 'depth5';
-            } else if (limit <= 10) {
-                depth = 'depth10';
-            }
+        limit = (limit === undefined) ? this.safeInteger (this.options, 'watchOrderBookLimit', 20) : limit;
+        const [ depth, streamLimit ] = this.normalizeOrderBookLimit (limit);
+        const streams: string[] = [];
+        const messageHashes: string[] = [];
+        for (let i = 0; i < symbols.length; i++) {
+            const market = this.market (symbols[i]);
             const stream = this.formatPerpStream (market['id'], depth + '@100ms');
-            streamHashes.push (stream);
-            urls.push (this.getStreamUrl (stream));
-            this.prepareOrderBook (market['symbol'], limit, params);
+            streams.push (stream);
+            messageHashes.push ('orderbook:' + market['symbol']);
+            this.prepareOrderBook (market['symbol'], streamLimit, params);
         }
-        const promises = urls.map ((url, index) => {
-            const market = markets[index];
-            const messageHash = 'orderbook:' + market['symbol'];
-            const client = this.client (url);
-            this.spawn (this.fetchOrderBookSnapshot, client, { 'symbol': market['symbol'], 'limit': limit, 'params': params });
-            return this.watch (url, messageHash, undefined, params);
-        });
-        const results = await Promise.all (promises);
-        return results[results.length - 1];
+        const url = this.getCombinedStreamUrl (streams);
+        const client = this.client (url);
+        for (let i = 0; i < symbols.length; i++) {
+            this.spawn (this.fetchOrderBookSnapshot, client, { 'symbol': symbols[i], 'limit': streamLimit, 'params': params });
+        }
+        return await this.watchMultiple (url, messageHashes, undefined, messageHashes);
     }
 
     prepareOrderBook (symbol: Str, limit: Int = undefined, params = {}) {
@@ -378,6 +378,7 @@ export default class asterdex extends asterdexRest {
     }
 
     async watchBidAsk (symbol: string, params = {}): Promise<Ticker> {
+        await this.loadMarkets ();
         const market = this.market (symbol);
         const stream = this.formatPerpStream (market['id'], 'bookTicker');
         const messageHash = 'bidask:' + market['symbol'];
@@ -921,7 +922,6 @@ export default class asterdex extends asterdexRest {
             }
         } catch (error) {
             this.reloadOrderBook (client, messageHash, symbol);
-            client.reject (error, messageHash);
         }
     }
 
