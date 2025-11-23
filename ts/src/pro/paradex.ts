@@ -277,8 +277,22 @@ export default class paradex extends paradexRest {
     async watchBidsAsks (symbols: Strings = undefined, params = {}): Promise<Tickers> {
         await this.loadMarkets ();
         symbols = this.marketSymbols (symbols);
-        const channel = 'markets_summary';
         const url = this.urls['api']['ws'];
+        let channel: string;
+        let messageHashes = [];
+        if ((symbols === undefined) || (symbols.length === 0)) {
+            channel = 'bbo.ALL';
+            messageHashes = [ 'bidsasks' ];
+        } else if (symbols.length === 1) {
+            const market = this.market (symbols[0]);
+            channel = 'bbo.' + market['id'];
+            messageHashes = [ 'bidask:' + market['symbol'] ];
+        } else {
+            channel = 'bbo.ALL';
+            for (let i = 0; i < symbols.length; i++) {
+                messageHashes.push ('bidask:' + symbols[i]);
+            }
+        }
         const request: Dict = {
             'jsonrpc': '2.0',
             'method': 'subscribe',
@@ -286,15 +300,7 @@ export default class paradex extends paradexRest {
                 'channel': channel,
             },
         };
-        const messageHashes = [];
-        if ((symbols === undefined) || (symbols.length === 0)) {
-            messageHashes.push ('bidsasks');
-        } else {
-            for (let i = 0; i < symbols.length; i++) {
-                messageHashes.push ('bidask:' + symbols[i]);
-            }
-        }
-        const response = await this.watchMultiple (url, messageHashes, this.deepExtend (request, params), messageHashes);
+        const response = await this.watchMultiple (url, messageHashes, this.deepExtend (request, params), [ channel ]);
         if (this.newUpdates) {
             const result: Dict = {};
             result[response['symbol']] = response;
@@ -414,10 +420,52 @@ export default class paradex extends paradexRest {
         return message;
     }
 
+    handleBbo (client: Client, message) {
+        //
+        //     {
+        //         "jsonrpc": "2.0",
+        //         "method": "subscription",
+        //         "params": {
+        //             "channel": "bbo.BTC-USD-PERP",
+        //             "data": {
+        //                 "seq_no": 153,
+        //                 "market": "BTC-USD-PERP",
+        //                 "last_updated_at": 1700000000000,
+        //                 "bid": "67000",
+        //                 "bid_size": "0.1",
+        //                 "ask": "67001",
+        //                 "ask_size": "0.2"
+        //             }
+        //         }
+        //     }
+        //
+        const params = this.safeDict (message, 'params', {});
+        const data = this.safeDict (params, 'data', {});
+        const marketId = this.safeString (data, 'market');
+        const market = this.safeMarket (marketId);
+        const symbol = market['symbol'];
+        const bidask = this.parseWsBidAsk (data, market);
+        if (bidask !== undefined) {
+            this.bidsasks = this.safeValue (this, 'bidsasks', {});
+            this.bidsasks[symbol] = bidask;
+            client.resolve (bidask, 'bidsasks');
+            client.resolve (bidask, 'bidask:' + symbol);
+            const channel = this.safeString (params, 'channel');
+            client.resolve (bidask, channel);
+        }
+        return message;
+    }
+
     parseWsBidAsk (ticker, market = undefined): Ticker {
-        const marketId = this.safeString (ticker, 'symbol');
+        let marketId = this.safeString (ticker, 'symbol');
+        if (marketId === undefined) {
+            marketId = this.safeString (ticker, 'market');
+        }
         const symbol = this.safeSymbol (marketId, market);
-        const timestamp = this.safeInteger (ticker, 'created_at');
+        let timestamp = this.safeInteger (ticker, 'created_at');
+        if (timestamp === undefined) {
+            timestamp = this.safeInteger (ticker, 'last_updated_at');
+        }
         let bid = this.safeString (ticker, 'bid');
         let ask = this.safeString (ticker, 'ask');
         if ((bid === undefined) || (ask === undefined) || (bid === '') || (ask === '')) {
@@ -502,6 +550,7 @@ export default class paradex extends paradexRest {
                 'trades': this.handleTrade,
                 'order_book': this.handleOrderBook,
                 'markets_summary': this.handleTicker,
+                'bbo': this.handleBbo,
                 // ...
             };
             const method = this.safeValue (methods, name);
