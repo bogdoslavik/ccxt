@@ -221,17 +221,25 @@ export default class hyperliquid extends hyperliquidRest {
         await this.loadMarkets ();
         const market = this.market (symbol);
         symbol = market['symbol'];
+        const depth = (limit !== undefined) ? Math.min (limit, 50) : undefined;
         const messageHash = 'orderbook:' + symbol;
         const url = this.urls['api']['ws']['public'];
+        const subscription: Dict = {
+            'type': 'l2Book',
+            'coin': market['swap'] ? market['baseName'] : market['id'],
+        };
+        if (depth !== undefined) {
+            subscription['depth'] = depth;
+        }
         const request: Dict = {
             'method': 'subscribe',
-            'subscription': {
-                'type': 'l2Book',
-                'coin': market['swap'] ? market['baseName'] : market['id'],
-            },
+            'subscription': subscription,
         };
         const message = this.extend (request, params);
-        const orderbook = await this.watch (url, messageHash, message, messageHash);
+        if (!(symbol in this.orderbooks)) {
+            this.orderbooks[symbol] = this.orderBook ({}, depth);
+        }
+        const orderbook = await this.watch (url, messageHash, message, messageHash, { 'symbol': symbol, 'limit': depth });
         return orderbook.limit ();
     }
 
@@ -303,13 +311,51 @@ export default class hyperliquid extends hyperliquidRest {
         const timestamp = this.safeInteger (entry, 'time');
         const snapshot = this.parseOrderBook (data, symbol, timestamp, 'bids', 'asks', 'px', 'sz');
         if (!(symbol in this.orderbooks)) {
-            const ob = this.orderBook (snapshot);
-            this.orderbooks[symbol] = ob;
+            this.orderbooks[symbol] = this.orderBook ({}, undefined);
         }
         const orderbook = this.orderbooks[symbol];
         orderbook.reset (snapshot);
         const messageHash = 'orderbook:' + symbol;
         client.resolve (orderbook, messageHash);
+    }
+
+    handleBbo (client: Client, message) {
+        //
+        //     {
+        //         "channel": "bbo",
+        //         "data": {
+        //             "coin": "BTC",
+        //             "time": 1710131872708,
+        //             "bbo": [
+        //                 { "px": "68674.0", "sz": "0.97139", "n": 4 },
+        //                 { "px": "68675.0", "sz": "0.04396", "n": 1 }
+        //             ]
+        //         }
+        //     }
+        //
+        const data = this.safeDict (message, 'data', {});
+        const coin = this.safeString (data, 'coin');
+        const marketId = this.coinToMarketId (coin);
+        const market = this.market (marketId);
+        const symbol = market['symbol'];
+        const bbo = this.safeList (data, 'bbo', []);
+        const bid = this.safeDict (bbo, 0, {});
+        const ask = this.safeDict (bbo, 1, {});
+        const timestamp = this.safeInteger (data, 'time');
+        const ticker = this.safeTicker ({
+            'symbol': symbol,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'bid': this.safeString (bid, 'px'),
+            'bidVolume': this.safeString (bid, 'sz'),
+            'ask': this.safeString (ask, 'px'),
+            'askVolume': this.safeString (ask, 'sz'),
+            'info': message,
+        }, market);
+        this.bidsasks = this.safeValue (this, 'bidsasks', {});
+        this.bidsasks[symbol] = ticker;
+        client.resolve (ticker, 'bidask:' + symbol);
+        client.resolve (ticker, 'bidsasks');
     }
 
     /**
@@ -357,29 +403,32 @@ export default class hyperliquid extends hyperliquidRest {
     }
 
     async watchBidAsk (symbol: string, params = {}): Promise<Ticker> {
+        await this.loadMarkets ();
         const market = this.market (symbol);
-        const bidsasks = await this.watchBidsAsks ([ market['symbol'] ], params);
-        return this.safeValue (bidsasks, market['symbol']);
+        const messageHash = 'bidask:' + market['symbol'];
+        const url = this.urls['api']['ws']['public'];
+        const subscription: Dict = {
+            'type': 'bbo',
+            'coin': market['swap'] ? market['baseName'] : market['id'],
+        };
+        const request: Dict = {
+            'method': 'subscribe',
+            'subscription': subscription,
+        };
+        return await this.watch (url, messageHash, this.extend (request, params), messageHash);
     }
 
     async watchBidsAsks (symbols: Strings = undefined, params = {}): Promise<Tickers> {
         await this.loadMarkets ();
         symbols = this.marketSymbols (symbols, undefined, true);
-        const messageHash = 'bidsasks';
-        const url = this.urls['api']['ws']['public'];
-        const request: Dict = {
-            'method': 'subscribe',
-            'subscription': {
-                'type': 'webData2',
-                'user': '0x0000000000000000000000000000000000000000',
-            },
-        };
-        const bidasks = await this.watch (url, messageHash, this.extend (request, params), messageHash);
-        if (this.newUpdates) {
-            return this.filterByArrayTickers (bidasks, 'symbol', symbols);
+        const promises = symbols.map ((symbol) => this.watchBidAsk (symbol, params));
+        const results = await Promise.all (promises);
+        const tickers: Tickers = {};
+        for (let i = 0; i < results.length; i++) {
+            const ticker = results[i];
+            tickers[ticker['symbol']] = ticker;
         }
-        this.bidsasks = this.safeValue (this, 'bidsasks', {});
-        return this.filterByArray (this.bidsasks, 'symbol', symbols);
+        return tickers;
     }
 
     async watchFundingRate (symbol: string, params = {}): Promise<FundingRate> {
@@ -1247,6 +1296,7 @@ export default class hyperliquid extends hyperliquidRest {
             'pong': this.handlePong,
             'trades': this.handleTrades,
             'l2Book': this.handleOrderBook,
+            'bbo': this.handleBbo,
             'candle': this.handleOHLCV,
             'orderUpdates': this.handleOrder,
             'userFills': this.handleMyTrades,
