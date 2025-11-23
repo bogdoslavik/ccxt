@@ -3,7 +3,9 @@
 import lighterRest from '../lighter.js';
 import Client from '../base/ws/Client.js';
 import Precise from '../base/Precise.js';
-import type { Strings, FundingRate, FundingRates, Dict, Market } from '../base/types.js';
+import { NotSupported } from '../base/errors.js';
+import type { Strings, FundingRate, FundingRates, Dict, Market, Ticker, OrderBook } from '../base/types.js';
+import { ExchangeError } from '../base/errors.js';
 
 //  ---------------------------------------------------------------------------
 
@@ -17,6 +19,7 @@ export default class lighter extends lighterRest {
                 'watchFundingRates': true,
                 'watchBidAsk': true,
                 'watchBidsAsks': true,
+                'watchOrderBook': true,
             }),
             'urls': this.deepExtend (parent['urls'], {
                 'api': this.deepExtend (parent['urls']['api'], {
@@ -75,32 +78,18 @@ export default class lighter extends lighterRest {
     async watchBidAsk (symbol: string, params = {}) {
         await this.loadMarkets ();
         const market = this.market (symbol);
-        const bidsasks = await this.watchBidsAsks ([ market['symbol'] ], params);
-        return this.safeValue (bidsasks, market['symbol']);
+        const orderbook = await this.watchOrderBook (market['symbol'], 20, params);
+        return this.orderBookToBidAsk (orderbook);
     }
 
     async watchBidsAsks (symbols: Strings = undefined, params = {}) {
         await this.loadMarkets ();
-        const url = this.urls['api']['ws']['public'];
         if (symbols === undefined || symbols.length === 0) {
-            const messageHash = 'bidsasks';
-            const request: Dict = {
-                'type': 'subscribe',
-                'channel': 'market_stats/all',
-            };
-            return await this.watch (url, messageHash, this.extend (request, params), messageHash);
+            throw new NotSupported (this.id + ' watchBidsAsks requires a symbol argument');
         }
-        const markets = symbols.map ((symbol) => this.market (symbol));
         const promises = [];
-        for (let i = 0; i < markets.length; i++) {
-            const market = markets[i];
-            const messageHash = 'bidask:' + market['symbol'];
-            const channel = 'market_stats/' + market['id'];
-            const request: Dict = {
-                'type': 'subscribe',
-                'channel': channel,
-            };
-            promises.push (this.watch (url, messageHash, this.extend (request, params), messageHash));
+        for (let i = 0; i < symbols.length; i++) {
+            promises.push (this.watchBidAsk (symbols[i], params));
         }
         const responses = await Promise.all (promises);
         const result = {};
@@ -176,6 +165,92 @@ export default class lighter extends lighterRest {
         }
     }
 
+    handleOrderBook (client: Client, message) {
+        const channel = this.safeString (message, 'channel');
+        const orderbook = this.safeDict (message, 'order_book');
+        if ((channel === undefined) || (orderbook === undefined)) {
+            return;
+        }
+        if (this.verbose) {
+            // raw log for debugging actual server payloads
+            console.log (this.id + ' raw order_book message', message);
+        }
+        const parts = channel.split (/[:/]/); // server returns "order_book:ID"
+        const marketId = this.safeString (parts, 1);
+        const market: Market = this.safeMarket (marketId, undefined, undefined, 'swap');
+        const symbol = market['symbol'];
+        const messageTs = this.safeInteger (message, 'timestamp');
+        const messageHash = 'orderbook:' + symbol;
+        if (!(symbol in this.orderbooks)) {
+            // wait for subscription handler to create book and fetch snapshot
+            return;
+        }
+        const stored = this.orderbooks[symbol];
+        const lastNonce = this.safeInteger (stored, 'nonce');
+        const offset = this.safeInteger2 (message, 'offset', 'nonce');
+        if (lastNonce !== undefined) {
+            if ((offset !== undefined) && (offset !== lastNonce + 1)) {
+                delete this.orderbooks[symbol];
+                client.reject (new ExchangeError (this.id + ' orderbook desync, reloading snapshot'), messageHash);
+                return;
+            }
+        }
+        if (stored['nonce'] === undefined) {
+            stored.cache.push (message);
+            return;
+        }
+        this.handleOrderBookMessage (client, message, stored, market, messageTs);
+        client.resolve (stored, messageHash);
+        const bidask = this.orderBookToBidAsk (stored);
+        if (bidask !== undefined) {
+            this.bidsasks = this.safeValue (this, 'bidsasks', {});
+            this.bidsasks[symbol] = bidask;
+            client.resolve (bidask, 'bidask:' + symbol);
+        }
+    }
+
+    handleOrderBookMessage (client: Client, message, orderbook, market: Market, messageTimestamp?: number) {
+        const data = this.safeDict (message, 'order_book', {});
+        const bids = this.safeList (data, 'bids', []);
+        const asks = this.safeList (data, 'asks', []);
+        this.handleDeltasWithKeys (orderbook['bids'], bids, 'price', 'size');
+        this.handleDeltasWithKeys (orderbook['asks'], asks, 'price', 'size');
+        const offset = this.safeInteger2 (message, 'offset', 'nonce');
+        if (offset !== undefined) {
+            orderbook['nonce'] = offset;
+        }
+        const timestamp = this.safeInteger2 (data, 'timestamp', 'ts', messageTimestamp);
+        orderbook['timestamp'] = timestamp;
+        orderbook['datetime'] = this.iso8601 (timestamp);
+        return orderbook;
+    }
+
+    orderBookToBidAsk (orderbook: OrderBook): Ticker {
+        const symbol = this.safeString (orderbook, 'symbol');
+        const bids = this.safeValue (orderbook, 'bids', []);
+        const asks = this.safeValue (orderbook, 'asks', []);
+        const bestBid = this.safeValue (bids, 0);
+        const bestAsk = this.safeValue (asks, 0);
+        if ((bestBid === undefined) || (bestAsk === undefined)) {
+            return undefined as any;
+        }
+        const bidPrice = this.safeString (bestBid, 0);
+        const bidSize = this.safeString (bestBid, 1);
+        const askPrice = this.safeString (bestAsk, 0);
+        const askSize = this.safeString (bestAsk, 1);
+        const timestamp = this.safeInteger (orderbook, 'timestamp');
+        return this.safeTicker ({
+            'symbol': symbol,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'bid': bidPrice,
+            'bidVolume': bidSize,
+            'ask': askPrice,
+            'askVolume': askSize,
+            'info': orderbook,
+        });
+    }
+
     parseMarketStatsFunding (stats: Dict): FundingRate {
         const marketId = this.safeString (stats, 'market_id');
         if (marketId === undefined) {
@@ -240,6 +315,85 @@ export default class lighter extends lighterRest {
         }, market);
     }
 
+    /**
+     * @method
+     * @name lighter#watchOrderBook
+     * @description watch order book for a symbol
+     * @param {string} symbol unified symbol
+     * @param {int} [limit] max depth
+     * @param {object} [params] extra params specific to lighter
+     */
+    async watchOrderBook (symbol: string, limit: Int = undefined, params = {}) {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const url = this.urls['api']['ws']['public'];
+        const channel = 'order_book/' + market['id'];
+        const messageHash = 'orderbook:' + market['symbol'];
+        const request: Dict = {
+            'type': 'subscribe',
+            'channel': channel,
+        };
+        const subscription: Dict = {
+            'symbol': market['symbol'],
+            'limit': limit,
+            'params': params,
+            'messageHash': messageHash,
+        };
+        const client = this.client (url);
+        this.handleOrderBookSubscription (client, undefined, subscription);
+        const orderbook = await this.watch (url, messageHash, this.extend (request, params), messageHash, subscription);
+        return orderbook.limit ();
+    }
+
+    handleOrderBookSubscription (client: Client, message, subscription) {
+        const defaultLimit = this.safeInteger (this.options, 'watchOrderBookLimit', 100);
+        const symbol = this.safeString (subscription, 'symbol');
+        const limit = this.safeInteger (subscription, 'limit', defaultLimit);
+        if (symbol in this.orderbooks) {
+            delete this.orderbooks[symbol];
+        }
+        this.orderbooks[symbol] = this.orderBook ({}, limit);
+        this.spawn (this.fetchOrderBookSnapshot, client, subscription);
+    }
+
+    async fetchOrderBookSnapshot (client: Client, subscription) {
+        try {
+            const symbol = this.safeString (subscription, 'symbol');
+            const market = this.market (symbol);
+            const params = this.safeValue (subscription, 'params', {});
+            const request: Dict = { 'market_ids': [ market['id'] ] };
+            const response = await this.publicGetOrderBooks (this.extend (request, params));
+            const data = this.safeValue (response, 'order_books', []);
+            const first = this.safeDict (data, 0, {});
+            const rawOrderBook = this.safeDict (first, 'order_book', first);
+            const timestamp = this.safeInteger (rawOrderBook, 'timestamp');
+            const snapshot = this.parseOrderBook (rawOrderBook, symbol, timestamp, 'bids', 'asks', 'price', 'size');
+            snapshot['symbol'] = symbol;
+            const offset = this.safeInteger2 (rawOrderBook, 'offset', 'nonce');
+            if (offset !== undefined) {
+                snapshot['nonce'] = offset;
+            }
+            const orderbook = this.orderbooks[symbol];
+            if (orderbook === undefined) {
+                return;
+            }
+            orderbook.reset (snapshot);
+            const messageHash = this.safeString (subscription, 'messageHash');
+            const cache = orderbook.cache;
+            const cacheLength = cache.length;
+            if (cacheLength) {
+                for (let i = 0; i < cacheLength; i++) {
+                    const message = cache[i];
+                    this.handleOrderBookMessage (client, message, orderbook);
+                }
+            }
+            client.resolve (orderbook, messageHash);
+        } catch (e) {
+            const messageHash = this.safeString (subscription, 'messageHash');
+            client.reject (e, messageHash);
+        }
+    }
+
     async pong (client: Client, message) {
         await client.send ({ 'type': 'pong' });
     }
@@ -252,8 +406,14 @@ export default class lighter extends lighterRest {
         } else if (type === 'update/market_stats') {
             this.handleMarketStats (client, message);
             return;
+        } else if (type === 'update/order_book') {
+            this.handleOrderBook (client, message);
+            return;
         } else if (type === 'connected') {
             return;
+        }
+        if (this.verbose) {
+            console.log (this.id + ' unhandled ws message', message);
         }
         client.resolve (message, type);
     }

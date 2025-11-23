@@ -4,15 +4,19 @@ import ccxt from '../../../ts/ccxt';
 // Defaults: exchangeId=paradex, symbol=all (aggregate stream if supported)
 
 const main = async () => {
-    const exchangeId = process.argv[2] ?? 'paradex'; // paradex asterdex lighter extended
-    const symbol = process.argv[3];
+    const exchangeId = process.argv[2] ?? 'lighter'; // paradex asterdex lighter extended
+    const symbol = process.argv[3] ?? 'ETH/USDC:USDC';
     if (!(exchangeId in ccxt.pro)) {
         console.error ('Unknown exchange id:', exchangeId);
         process.exit (1);
     }
 
     const exchange = new (ccxt.pro as any)[exchangeId] ({ enableRateLimit: true });
+    // exchange.verbose = true;
     await exchange.loadMarkets ();
+    const symbols = exchange.symbols ?? [];
+    console.log (`Loaded ${symbols.length} symbols for ${exchangeId}:`);
+    console.log (symbols.join (', '));
 
     const shutdown = async () => {
         console.log ('\nClosing WebSocket...');
